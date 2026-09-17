@@ -46,7 +46,7 @@ python -m goldbot --data data/XAUUSD_M5.csv validate   # على بياناتك �
 
 ## Two ways to run this
 
-| | `goldbot/` (Python) | `mt5/GoldBot_M5.mq5` (MQL5) |
+| | `goldbot/` (Python) | `mt5/XauTrend_M5.mq5` (MQL5) |
 |---|---|---|
 | Purpose | research, backtesting, validation | live trading on MetaTrader 5 |
 | Runs on | any OS | MT5 terminal (Windows / VPS) |
@@ -61,15 +61,28 @@ decision on every bar. If the two ever drift apart, the suite fails.
 
 ### MetaTrader 5 (Exness)
 
-**Arabic install guide: [`docs/GoldBot_Exness_MT5_AR.pdf`](docs/GoldBot_Exness_MT5_AR.pdf)** —
+**Arabic install guide: [`docs/XauTrend_Exness_MT5_AR.pdf`](docs/XauTrend_Exness_MT5_AR.pdf)** —
 9 pages covering installation, Exness-specific settings, the full parameter
 reference, Strategy Tester setup, troubleshooting and a pre-flight checklist.
 It is generated from the EA source (`python3 tools/make_guide_pdf.py`), so the
 parameter tables cannot drift out of date.
 
-Short version: `File → Open Data Folder → MQL5 → Experts`, drop the `.mq5` in,
-refresh the Navigator, compile, attach to an XAUUSD **M5** chart, enable
-AutoTrading.
+**One-click install (Windows):** run `mt5/installer/Install-XauTrend.bat`
+next to the `.mq5`. It finds every MT5 data folder under
+`%APPDATA%\MetaQuotes\Terminal`, removes earlier copies from `Experts`,
+`Scripts` and `Indicators`, copies the source into `Experts`, then locates
+that terminal's MetaEditor (via its `origin.txt`, falling back to a Program
+Files search) and compiles it from the command line. If MetaEditor cannot be
+found it says so and leaves you one `F7` away.
+
+Manual install: `File → Open Data Folder → MQL5 → Experts`, drop the `.mq5` in,
+press `F4`, compile, refresh the Navigator, attach to an XAUUSD **M5** chart,
+enable AutoTrading.
+
+> MetaEditor decides the program *type* from the folder: `Experts` needs
+> `OnTick()`, `Scripts` needs `OnStart()`, `Indicators` needs `OnCalculate()`.
+> A file in the wrong folder fails with `event handling function not found`
+> even though the code is perfectly valid.
 
 Nothing broker-specific is hardcoded. Contract size, tick value, lot step,
 minimum stop distance and order fill policy are all read from the symbol at run
@@ -242,9 +255,11 @@ There will be divergence. That divergence is your honest error bar.
 
 ```
 mt5/
-  GoldBot_M5.mq5         the Expert Advisor you install into MetaTrader 5
+  XauTrend_M5.mq5        the Expert Advisor you install into MetaTrader 5
+  installer/
+    Install-XauTrend.bat      one-click Windows installer (copies + compiles)
 docs/
-  GoldBot_Exness_MT5_AR.pdf   Arabic install & operation guide (generated)
+  XauTrend_Exness_MT5_AR.pdf  Arabic install & operation guide (generated)
 tools/
   pdf_rtl.py             right-to-left PDF layout engine
   make_guide_pdf.py      builds the guide from the EA source

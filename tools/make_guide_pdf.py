@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the Arabic installation and operation guide for GoldBot_M5.mq5.
+"""Generate the Arabic installation and operation guide for XauTrend_M5.mq5.
 
 The guide is generated, not hand-written, so that it cannot drift away from the
 EA: every default in the parameter tables is parsed out of the ``.mq5`` source
@@ -18,8 +18,8 @@ sys.path.insert(0, str(ROOT))
 
 from tools.pdf_rtl import RtlDoc  # noqa: E402
 
-MQ5 = ROOT / "mt5" / "GoldBot_M5.mq5"
-OUT = ROOT / "docs" / "GoldBot_Exness_MT5_AR.pdf"
+MQ5 = ROOT / "mt5" / "XauTrend_M5.mq5"
+OUT = ROOT / "docs" / "XauTrend_Exness_MT5_AR.pdf"
 
 
 def mq5_defaults() -> dict[str, str]:
@@ -32,7 +32,7 @@ def mq5_defaults() -> dict[str, str]:
 def build() -> Path:
     d = mq5_defaults()
     OUT.parent.mkdir(parents=True, exist_ok=True)
-    doc = RtlDoc(str(OUT), "دليل بوت الذهب — إكسنس MetaTrader 5")
+    doc = RtlDoc(str(OUT), "دليل XauTrend — إكسنس MetaTrader 5")
 
     # ------------------------------------------------------------------ cover
     doc.cover(
@@ -40,7 +40,7 @@ def build() -> Path:
         "بوت تداول الذهب XAUUSD على MetaTrader 5",
         "مخصّص لحسابات Exness — إطار 5 دقائق",
         [
-            "اسم الملف: GoldBot_M5.mq5",
+            "اسم الملف: XauTrend_M5.mq5",
             "النسخة: 1.00",
             "المنصّة: MetaTrader 5 (بناء 3800 أو أحدث)",
             "الأداة: XAUUSD — الإطار الزمني M5",
@@ -126,7 +126,7 @@ def build() -> Path:
     doc.numbered(2, "ادخل على المجلد: MQL5 ← Experts")
     doc.code(
         [
-            r"...\MetaQuotes\Terminal\<ID>\MQL5\Experts\GoldBot_M5.mq5",
+            r"...\MetaQuotes\Terminal\<ID>\MQL5\Experts\XauTrend_M5.mq5",
         ]
     )
     doc.p(
@@ -136,9 +136,9 @@ def build() -> Path:
     )
 
     doc.numbered(3, "ارجع للمنصّة، وبنافذة Navigator اضغط يمين على Expert Advisors ← Refresh")
-    doc.p("راح يظهر GoldBot_M5 بالقائمة. إذا ما ظهر، تأكد أن الملف بالمجلد الصحيح.", size=10)
+    doc.p("راح يظهر XauTrend_M5 بالقائمة. إذا ما ظهر، تأكد أن الملف بالمجلد الصحيح.", size=10)
 
-    doc.numbered(4, "اضغط يمين على GoldBot_M5 ← Modify، راح ينفتح MetaEditor")
+    doc.numbered(4, "اضغط يمين على XauTrend_M5 ← Modify، راح ينفتح MetaEditor")
     doc.p(
         "اضغط زر Compile (أو F7). لازم تطلع رسالة 0 errors, 0 warnings. بعدها سكّر "
         "MetaEditor وارجع للمنصّة.",
@@ -152,7 +152,7 @@ def build() -> Path:
         size=10,
     )
 
-    doc.numbered(6, "اسحب GoldBot_M5 من Navigator وأفلته على الشارت")
+    doc.numbered(6, "اسحب XauTrend_M5 من Navigator وأفلته على الشارت")
     doc.p(
         "راح تنفتح نافذة الإعدادات. بتبويب Common تأكد أن خيار Allow Algo Trading مفعّل. "
         "بتبويب Inputs تشوف كل الإعدادات — خلّيها كما هي بالبداية.",
@@ -180,7 +180,7 @@ def build() -> Path:
     )
     doc.code(
         [
-            "GoldBot M5 started on XAUUSD | server GMT offset +3 h |",
+            "XauTrend M5 started on XAUUSD | server GMT offset +3 h |",
             "  tick 0.01000, tick value 1.00000, lots 0.01-200.00 step 0.01",
             "Session 07:00-16:00 GMT  =  10:00-19:00 server time",
         ]
@@ -331,7 +331,7 @@ def build() -> Path:
     doc.table(
         ["القيمة المطلوبة", "الحقل"],
         [
-            ["GoldBot_M5", "Expert"],
+            ["XauTrend_M5", "Expert"],
             ["رمز الذهب بحسابك", "Symbol"],
             ["M5", "Period"],
             ["Every tick based on real ticks", "Modelling"],

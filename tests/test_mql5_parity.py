@@ -1,6 +1,6 @@
 """Parity between the Python strategy and the MQL5 Expert Advisor.
 
-The EA in ``mt5/GoldBot_M5.mq5`` is a hand port of
+The EA in ``mt5/XauTrend_M5.mq5`` is a hand port of
 ``goldbot/strategy/trend_pullback.py``. Nothing in this repository compiles
 MQL5, so a porting bug -- a flipped comparison, a lookback window off by one,
 a default that drifted -- would otherwise be invisible until it cost money
@@ -32,7 +32,7 @@ import pytest
 from goldbot.backtest.types import Side
 from goldbot.strategy.trend_pullback import TrendPullback, TrendPullbackParams
 
-MQ5 = Path(__file__).resolve().parents[1] / "mt5" / "GoldBot_M5.mq5"
+MQ5 = Path(__file__).resolve().parents[1] / "mt5" / "XauTrend_M5.mq5"
 
 # MQL5 input name -> Python dataclass field
 PARAM_MAP = {
@@ -112,7 +112,7 @@ def test_risk_defaults_match_the_yaml_config():
 # Transliteration of the EA's TryEntry(), indexed the way the MQL5 code is.
 # --------------------------------------------------------------------------
 def mql5_entry(i: int, feat, p: TrendPullbackParams):
-    """Mirror of ``TryEntry`` in GoldBot_M5.mq5.
+    """Mirror of ``TryEntry`` in XauTrend_M5.mq5.
 
     In the EA, ``rates[0]`` / ``buffer[0]`` are the last CLOSED bar. Here bar
     ``i`` plays that role, so ``rates[k]`` maps to ``i - k``.

@@ -86,7 +86,7 @@ def test_wrap_respects_the_width_budget():
 
 
 def test_wrap_preserves_every_word():
-    text = "انسخ الملف GoldBot_M5.mq5 إلى مجلد Experts ثم اضغط Refresh"
+    text = "انسخ الملف XauTrend_M5.mq5 إلى مجلد Experts ثم اضغط Refresh"
     joined = " ".join(wrap_logical(text, "Body", 10.5, 120.0))
     assert joined.split() == text.split(), "wrapping must not drop or reorder words"
 
@@ -131,7 +131,7 @@ def test_code_block_rejects_arabic(tmp_path):
     no error. It must fail loudly instead."""
     doc = RtlDoc(str(tmp_path / "c.pdf"), AR)
     doc.cover("ع", "و", "س", [])
-    doc.code([r"C:\Users\me\MQL5\Experts\GoldBot_M5.mq5"])  # fine
+    doc.code([r"C:\Users\me\MQL5\Experts\XauTrend_M5.mq5"])  # fine
     with pytest.raises(ValueError, match="right-to-left"):
         doc.code(["انسخ الملف هنا"])
 
@@ -140,7 +140,7 @@ def test_code_block_allows_paths_and_log_lines(tmp_path):
     doc = RtlDoc(str(tmp_path / "c2.pdf"), AR)
     doc.cover("ع", "و", "س", [])
     doc.code([
-        "GoldBot M5 started on XAUUSD | server GMT offset +3 h |",
+        "XauTrend M5 started on XAUUSD | server GMT offset +3 h |",
         "Session 07:00-16:00 GMT  =  10:00-19:00 server time",
     ])
     doc.save()
