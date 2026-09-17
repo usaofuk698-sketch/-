@@ -196,10 +196,13 @@ int OnInit()
    // symbol's digits -- 500 points is 5.00 USD/oz on a 2-digit gold feed but
    // only 0.50 on a 3-digit one. Convert once here and print both, so the
    // setting can be sanity-checked at a glance instead of guessed at.
-   double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
-   g_maxSpreadPrice = InpMaxSpreadPoints * point;
-   PrintFormat("Max spread: %d points = %.2f USD/oz  (symbol has %d digits, 1 point = %.5f)",
-               InpMaxSpreadPoints, g_maxSpreadPrice, _Digits, point);
+   // Named pointSize, not point: MQL5 carries MQL4-compatibility identifiers
+   // around Point/_Point, and a local that close to a built-in name is not
+   // worth the risk in a file that cannot be test-compiled here.
+   double pointSize = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+   g_maxSpreadPrice = InpMaxSpreadPoints * pointSize;
+   PrintFormat("Max spread: %d points = %.2f USD/oz  (symbol digits %d, 1 point = %.5f)",
+               InpMaxSpreadPoints, g_maxSpreadPrice, (int)_Digits, pointSize);
    if(g_maxSpreadPrice >= 3.0)
       PrintFormat("WARNING: a %.2f USD/oz spread limit is very permissive. Typical XAUUSD "
                   "spread is 0.15-0.50. At this setting the filter will almost never block "
