@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+*.egg-info/
+.DS_Store
+
+# Never commit market data or results
+data/*.csv
+data/*.parquet
+out/
+results/
+
+# Never commit credentials
+.env
+secrets.yaml

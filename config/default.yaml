@@ -1,0 +1,88 @@
+# ---------------------------------------------------------------------------
+# XAUUSD M5 configuration.
+#
+# The cost figures below are the ones that decide whether this is viable.
+# Replace them with numbers taken from YOUR broker's statement before you read
+# anything into a backtest: on a $3 stop, a 0.20 spread is 7% of the risk on
+# every trade, and a 0.45 spread is 15%.
+# ---------------------------------------------------------------------------
+symbol: XAUUSD
+timeframe: 5min
+max_bars_in_trade: 96          # 8 hours on M5; stale trades are dead capital
+
+account:
+  initial_capital: 10000
+
+data:
+  path: null                   # path to your M5 CSV; null -> synthetic test data
+  timezone: UTC                # MT5 exports are BROKER time, not UTC. Check this.
+
+contract:
+  symbol: XAUUSD
+  contract_size: 100           # 1.00 lot = 100 oz, so $1 move = $100
+  tick_size: 0.01
+  min_lot: 0.01
+  lot_step: 0.01
+  commission_per_lot_per_side: 0.0
+
+costs:
+  spread:
+    preset: xauusd_default     # hour-of-day profile: tight in NY, wide in Asia
+    base: 0.20                 # USD/oz during the liquid session
+    rollover_hour: 0           # UTC hour where the spread blows out
+    rollover_spread: 3.00
+  slippage: 0.05               # adverse slip on market and stop orders
+  swap_long_per_lot: 0.0       # USD per lot per night
+  swap_short_per_lot: 0.0
+
+risk:
+  risk_per_trade_pct: 0.5      # halve this before you raise it
+  max_daily_loss_pct: 2.0
+  max_trades_per_day: 5
+  max_consecutive_losses: 4
+  max_concurrent_positions: 1
+  compounding: true
+  min_stop_distance: 0.5       # USD/oz
+  max_stop_distance: 30.0
+  trading_days: [0, 1, 2, 3, 4]
+  sessions:
+    - start_hour: 7            # London open through the NY overlap (UTC)
+      end_hour: 16
+  no_new_trades_after_hour: 16
+  flat_by_hour: 20             # never carry M5 risk overnight
+
+strategy:
+  name: trend_pullback
+  params:
+    ema_fast: 21
+    ema_slow: 55
+    ema_trend: 200
+    adx_period: 14
+    adx_min: 22.0
+    atr_period: 14
+    regime_lookback: 288
+    atr_min_mult: 0.80
+    atr_max_mult: 2.50
+    rsi_period: 14
+    rsi_pullback_long: 45.0
+    rsi_pullback_short: 55.0
+    pullback_lookback: 8
+    swing_lookback: 12
+    stop_atr_buffer: 0.35
+    min_stop_atr_mult: 1.00
+    reward_risk: 1.8
+    breakeven_at_r: 1.0
+    breakeven_offset_atr: 0.10
+    trail_at_r: 1.5
+    trail_atr_mult: 1.5
+
+# Grid searched by `scripts/walkforward.py`. Keep it SMALL. Every extra
+# combination is another chance for the optimiser to fit noise: testing 1000
+# combinations means ~50 will look excellent on pure chance alone.
+walkforward:
+  train_bars: 30000            # ~14 weeks of M5
+  test_bars: 10000             # ~5 weeks traded forward
+  grid:
+    adx_min: [18.0, 22.0, 26.0]
+    reward_risk: [1.5, 1.8, 2.2]
+    rsi_pullback_long: [40.0, 45.0]

@@ -1,0 +1,10 @@
+# Research and backtesting
+numpy>=1.24
+pandas>=2.0
+PyYAML>=6.0
+
+# Tests
+pytest>=7.4
+
+# Live trading only, and Windows only. Not needed for research.
+# MetaTrader5>=5.0.45
