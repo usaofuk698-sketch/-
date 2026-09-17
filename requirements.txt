@@ -5,6 +5,14 @@ PyYAML>=6.0
 
 # Tests
 pytest>=7.4
+fonttools>=4.40        # font coverage checks in tests/test_pdf_rtl.py
+pypdfium2>=4.0         # PDF rendering checks in tests/test_pdf_rtl.py
+
+# Building the Arabic PDF guide (tools/make_guide_pdf.py).
+# Needs the DejaVu fonts: apt-get install fonts-dejavu-core
+reportlab>=4.0
+arabic-reshaper>=3.0   # Arabic letters -> positional presentation forms
+python-bidi>=0.4       # Unicode bidirectional reordering
 
 # Live trading only, and Windows only. Not needed for research.
 # MetaTrader5>=5.0.45

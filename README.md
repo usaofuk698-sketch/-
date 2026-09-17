@@ -44,12 +44,50 @@ python -m goldbot --data data/XAUUSD_M5.csv validate   # على بياناتك �
 
 ---
 
+## Two ways to run this
+
+| | `goldbot/` (Python) | `mt5/GoldBot_M5.mq5` (MQL5) |
+|---|---|---|
+| Purpose | research, backtesting, validation | live trading on MetaTrader 5 |
+| Runs on | any OS | MT5 terminal (Windows / VPS) |
+| Install | `pip install -r requirements.txt` | copy one file into `MQL5\Experts` |
+| Use it to | decide whether the strategy is worth trading | trade it once you have decided |
+
+The EA is a direct port of the Python strategy — same entry conditions, same
+stop placement, same sizing formula, same risk limits. `tests/test_mql5_parity.py`
+parses the `.mq5` source and asserts both that every default matches the Python
+dataclass and that a transliteration of the EA's entry logic makes the identical
+decision on every bar. If the two ever drift apart, the suite fails.
+
+### MetaTrader 5 (Exness)
+
+**Arabic install guide: [`docs/GoldBot_Exness_MT5_AR.pdf`](docs/GoldBot_Exness_MT5_AR.pdf)** —
+9 pages covering installation, Exness-specific settings, the full parameter
+reference, Strategy Tester setup, troubleshooting and a pre-flight checklist.
+It is generated from the EA source (`python3 tools/make_guide_pdf.py`), so the
+parameter tables cannot drift out of date.
+
+Short version: `File → Open Data Folder → MQL5 → Experts`, drop the `.mq5` in,
+refresh the Navigator, compile, attach to an XAUUSD **M5** chart, enable
+AutoTrading.
+
+Nothing broker-specific is hardcoded. Contract size, tick value, lot step,
+minimum stop distance and order fill policy are all read from the symbol at run
+time, so the same file works on Exness Standard, Cent, Raw Spread or Zero, and
+on `XAUUSD`, `XAUUSDm` or any suffixed gold symbol, with no edits.
+
+> **Check one line in the log before you trade it.** The EA prints the server's
+> detected GMT offset and the session hours it translates to. Broker server time
+> is not GMT and shifts with daylight saving. If that line is wrong, the bot
+> trades the Asian session instead of the London/NY overlap — a different system
+> than the one you tested.
+
 ## Install
 
 ```bash
 git clone <this repo> && cd -
 pip install -r requirements.txt
-python -m pytest tests/ -q          # 71 tests
+python -m pytest tests/ -q          # 112 tests
 ```
 
 Python 3.11+. Research needs only numpy, pandas and PyYAML.
@@ -203,6 +241,13 @@ There will be divergence. That divergence is your honest error bar.
 ## Project layout
 
 ```
+mt5/
+  GoldBot_M5.mq5         the Expert Advisor you install into MetaTrader 5
+docs/
+  GoldBot_Exness_MT5_AR.pdf   Arabic install & operation guide (generated)
+tools/
+  pdf_rtl.py             right-to-left PDF layout engine
+  make_guide_pdf.py      builds the guide from the EA source
 goldbot/
   contract.py            instrument spec, sizing and rounding
   indicators.py          causal indicators (EMA, RSI, ATR, ADX, Wilder RMA)
