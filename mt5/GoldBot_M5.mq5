@@ -26,13 +26,12 @@
 #property copyright "goldbot"
 #property link      ""
 #property version   "1.00"
-#property strict
 
 #include <Trade\Trade.mqh>
 #include <Trade\PositionInfo.mqh>
 
-CTrade        Trade;
-CPositionInfo PositionInfo;
+CTrade        trade;
+CPositionInfo posInfo;
 
 //--- enums ---------------------------------------------------------
 enum ENUM_TZ_MODE
@@ -170,12 +169,11 @@ int OnInit()
       return(INIT_FAILED);
      }
 
-   Trade.SetExpertMagicNumber(InpMagicNumber);
-   Trade.SetDeviationInPoints(InpSlippagePoints);
+   trade.SetExpertMagicNumber(InpMagicNumber);
+   trade.SetDeviationInPoints(InpSlippagePoints);
    // Picks FOK / IOC / RETURN according to what this symbol actually allows.
    // Guessing here is a common cause of "Unsupported filling mode" rejections.
-   Trade.SetTypeFillingBySymbol(_Symbol);
-   Trade.LogLevel(LOG_LEVEL_ERRORS);
+   trade.SetTypeFillingBySymbol(_Symbol);
 
    g_gmtOffsetHrs = ResolveGmtOffset();
    ResetDailyState(true);
@@ -497,9 +495,9 @@ bool HasOpenPosition()
   {
    for(int i = PositionsTotal() - 1; i >= 0; i--)
      {
-      if(!PositionInfo.SelectByIndex(i)) continue;
-      if(PositionInfo.Symbol() != _Symbol) continue;
-      if(PositionInfo.Magic() != InpMagicNumber) continue;
+      if(!posInfo.SelectByIndex(i)) continue;
+      if(posInfo.Symbol() != _Symbol) continue;
+      if(posInfo.Magic() != InpMagicNumber) continue;
       return(true);
      }
    return(false);
@@ -509,9 +507,9 @@ bool SelectOwnPosition()
   {
    for(int i = PositionsTotal() - 1; i >= 0; i--)
      {
-      if(!PositionInfo.SelectByIndex(i)) continue;
-      if(PositionInfo.Symbol() != _Symbol) continue;
-      if(PositionInfo.Magic() != InpMagicNumber) continue;
+      if(!posInfo.SelectByIndex(i)) continue;
+      if(posInfo.Symbol() != _Symbol) continue;
+      if(posInfo.Magic() != InpMagicNumber) continue;
       return(true);
      }
    return(false);
@@ -727,8 +725,8 @@ void OpenTrade(ENUM_ORDER_TYPE type, double price, double sl, double tp, double 
    tp = NormalizeDouble(tp, _Digits);
 
    bool ok = (type == ORDER_TYPE_BUY)
-             ? Trade.Buy(lots, _Symbol, 0.0, sl, tp, "goldbot")
-             : Trade.Sell(lots, _Symbol, 0.0, sl, tp, "goldbot");
+             ? trade.Buy(lots, _Symbol, 0.0, sl, tp, "goldbot")
+             : trade.Sell(lots, _Symbol, 0.0, sl, tp, "goldbot");
 
    if(ok)
      {
@@ -739,9 +737,9 @@ void OpenTrade(ENUM_ORDER_TYPE type, double price, double sl, double tp, double 
      }
    else
      {
-      g_status = StringFormat("order failed: %d %s", Trade.ResultRetcode(), Trade.ResultRetcodeDescription());
+      g_status = StringFormat("order failed: %d %s", trade.ResultRetcode(), trade.ResultRetcodeDescription());
       PrintFormat("ORDER FAILED retcode=%d (%s) lots=%.2f sl=%.2f tp=%.2f",
-                  Trade.ResultRetcode(), Trade.ResultRetcodeDescription(), lots, sl, tp);
+                  trade.ResultRetcode(), trade.ResultRetcodeDescription(), lots, sl, tp);
      }
   }
 
@@ -752,11 +750,11 @@ void ManageOpenPosition(datetime now)
   {
    if(!SelectOwnPosition()) return;
 
-   ulong  ticket = PositionInfo.Ticket();
-   long   type   = PositionInfo.PositionType();
-   double entry  = PositionInfo.PriceOpen();
-   double sl     = PositionInfo.StopLoss();
-   double tp     = PositionInfo.TakeProfit();
+   ulong  ticket = posInfo.Ticket();
+   long   type   = posInfo.PositionType();
+   double entry  = posInfo.PriceOpen();
+   double sl     = posInfo.StopLoss();
+   double tp     = posInfo.TakeProfit();
 
    //--- forced flat: session over, wrong day, or the day's risk budget is spent
    bool mustFlat = g_halted
@@ -765,7 +763,7 @@ void ManageOpenPosition(datetime now)
 
    if(mustFlat)
      {
-      if(Trade.PositionClose(ticket))
+      if(trade.PositionClose(ticket))
          PrintFormat("Closed #%I64u: %s", ticket,
                      (g_halted ? g_haltReason : "session close"));
       g_status = "flattened";
@@ -775,11 +773,11 @@ void ManageOpenPosition(datetime now)
    //--- time stop
    if(InpMaxBarsInTrade > 0)
      {
-      datetime opened = (datetime)PositionInfo.Time();
+      datetime opened = (datetime)posInfo.Time();
       int barsHeld = iBarShift(_Symbol, PERIOD_CURRENT, opened, false);
       if(barsHeld >= InpMaxBarsInTrade)
         {
-         if(Trade.PositionClose(ticket))
+         if(trade.PositionClose(ticket))
             PrintFormat("Closed #%I64u: held %d bars (max %d)", ticket, barsHeld, InpMaxBarsInTrade);
          g_status = "time stop";
          return;
@@ -828,11 +826,11 @@ void ManageOpenPosition(datetime now)
    newSl = NormalizeDouble(newSl, _Digits);
    if(MathAbs(newSl - sl) < g_tickSize) return;   // not worth a server round trip
 
-   if(Trade.PositionModify(ticket, newSl, tp))
+   if(trade.PositionModify(ticket, newSl, tp))
       g_status = StringFormat("stop -> %.2f", newSl);
    else
       PrintFormat("PositionModify #%I64u failed: %d (%s)",
-                  ticket, Trade.ResultRetcode(), Trade.ResultRetcodeDescription());
+                  ticket, trade.ResultRetcode(), trade.ResultRetcodeDescription());
   }
 
 //+------------------------------------------------------------------+
