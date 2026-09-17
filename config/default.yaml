@@ -46,10 +46,18 @@ risk:
   max_stop_distance: 30.0
   trading_days: [0, 1, 2, 3, 4]
   sessions:
-    - start_hour: 7            # London open through the NY overlap (UTC)
-      end_hour: 16
-  no_new_trades_after_hour: 16
-  flat_by_hour: 20             # never carry M5 risk overnight
+    - start_hour: 0            # 0 -> 24 disables the session filter entirely
+      end_hour: 24
+  no_new_trades_after_hour: 24 # 24 = never blocks (hours run 0..23)
+  flat_by_hour: 24             # 24 = never force-flat; trades can run overnight
+
+  # Entries above this spread are skipped, in USD/oz. This MUST match the EA's
+  # InpMaxSpreadPoints, which is entered in POINTS because that is what MT5
+  # displays. The EA prints the conversion on startup -- read that line and put
+  # the USD figure here, or the backtest takes trades the live bot refuses.
+  #   500 points = 5.00 USD/oz on a 2-digit gold feed
+  #   500 points = 0.50 USD/oz on a 3-digit gold feed
+  max_spread: 5.0
 
 strategy:
   name: trend_pullback

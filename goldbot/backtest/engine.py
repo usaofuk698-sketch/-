@@ -216,6 +216,8 @@ class BacktestEngine:
         ok, why = self.risk.may_open(ts, open_positions=0)
         if not ok:
             return None, why
+        if not self.risk.spread_ok(spread):
+            return None, "spread_too_wide"
 
         fill = self.broker.entry_fill(sig.side, bar_open, spread)
 

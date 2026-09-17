@@ -95,3 +95,16 @@ def test_concurrent_position_cap():
     ts = pd.Timestamp("2024-01-03 10:00")
     rm.on_bar(ts, 10_000.0)
     assert not rm.may_open(ts, open_positions=1)[0]
+
+
+def test_spread_filter_mirrors_the_ea():
+    """The EA refuses entries above InpMaxSpreadPoints. If the backtest does
+    not, it takes trades the live bot never would."""
+    rm = _rm(max_spread=5.0)
+    assert rm.spread_ok(0.25)
+    assert rm.spread_ok(5.0), "the limit itself must be allowed"
+    assert not rm.spread_ok(5.01)
+
+
+def test_spread_filter_is_off_by_default():
+    assert _rm().spread_ok(999.0), "no limit configured means no filtering"

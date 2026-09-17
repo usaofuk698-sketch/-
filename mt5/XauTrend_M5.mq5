@@ -55,10 +55,10 @@ input double InpFixedLots          = 0.0;    // >0 overrides risk sizing (NOT re
 input group "=== Session (hours are GMT/UTC, not server time) ==="
 input ENUM_TZ_MODE InpTzMode       = TZ_AUTO; // How to resolve server time -> GMT
 input int    InpServerGmtOffset    = 0;      // Server GMT offset when TZ_MANUAL
-input int    InpSessionStartHour   = 7;      // Session opens (GMT)
-input int    InpSessionEndHour     = 16;     // Session closes (GMT)
-input int    InpNoNewTradesAfter   = 16;     // No new entries from this GMT hour
-input int    InpFlatByHour         = 20;     // Force flat at this GMT hour
+input int    InpSessionStartHour   = 0;      // Session opens (GMT). 0 + 24 = no session filter
+input int    InpSessionEndHour     = 24;     // Session closes (GMT)
+input int    InpNoNewTradesAfter   = 24;     // No new entries from this GMT hour (24 = off)
+input int    InpFlatByHour         = 24;     // Force flat at this GMT hour (24 = never)
 input bool   InpTradeMonday        = true;
 input bool   InpTradeTuesday       = true;
 input bool   InpTradeWednesday     = true;
@@ -67,7 +67,7 @@ input bool   InpTradeFriday        = true;
 
 input group "=== Execution ==="
 input long   InpMagicNumber        = 770577; // Identifies this EA's own trades
-input double InpMaxSpread          = 0.60;   // Skip entries above this spread (price units)
+input int    InpMaxSpreadPoints    = 500;    // Skip entries above this spread, IN POINTS (as MT5 shows it)
 input int    InpSlippagePoints     = 30;     // Max deviation on market orders
 input int    InpMaxBarsInTrade     = 96;     // Close a trade older than this (0 = off)
 
@@ -129,6 +129,7 @@ bool     g_halted        = false;
 string   g_haltReason    = "";
 
 // --- symbol spec, resolved once in OnInit
+double   g_maxSpreadPrice = 0.0;  // InpMaxSpreadPoints converted to price units
 double   g_tickSize      = 0.0;
 double   g_tickValue     = 0.0;
 double   g_volMin        = 0.0;
@@ -182,10 +183,31 @@ int OnInit()
                "tick %.5f, tick value %.5f, lots %.2f-%.2f step %.2f | stops level %d pts",
                _Symbol, g_gmtOffsetHrs, g_tickSize, g_tickValue,
                g_volMin, g_volMax, g_volStep, g_stopsLevelPts);
-   PrintFormat("Session %02d:00-%02d:00 GMT  =  %02d:00-%02d:00 server time",
-               InpSessionStartHour, InpSessionEndHour,
-               (InpSessionStartHour + g_gmtOffsetHrs + 24) % 24,
-               (InpSessionEndHour   + g_gmtOffsetHrs + 24) % 24);
+   if(InpSessionStartHour <= 0 && InpSessionEndHour >= 24)
+      Print("Session filter: OFF - trading all hours on permitted weekdays.");
+   else
+      PrintFormat("Session %02d:00-%02d:00 GMT  =  %02d:00-%02d:00 server time",
+                  InpSessionStartHour, InpSessionEndHour,
+                  (InpSessionStartHour + g_gmtOffsetHrs + 24) % 24,
+                  (InpSessionEndHour   + g_gmtOffsetHrs + 24) % 24);
+
+   // The spread limit is entered in POINTS because that is the unit MetaTrader
+   // displays in Market Watch. What it means in money depends entirely on the
+   // symbol's digits -- 500 points is 5.00 USD/oz on a 2-digit gold feed but
+   // only 0.50 on a 3-digit one. Convert once here and print both, so the
+   // setting can be sanity-checked at a glance instead of guessed at.
+   double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+   g_maxSpreadPrice = InpMaxSpreadPoints * point;
+   PrintFormat("Max spread: %d points = %.2f USD/oz  (symbol has %d digits, 1 point = %.5f)",
+               InpMaxSpreadPoints, g_maxSpreadPrice, _Digits, point);
+   if(g_maxSpreadPrice >= 3.0)
+      PrintFormat("WARNING: a %.2f USD/oz spread limit is very permissive. Typical XAUUSD "
+                  "spread is 0.15-0.50. At this setting the filter will almost never block "
+                  "a trade, so you will pay whatever spread the broker quotes, including "
+                  "the rollover blowout.", g_maxSpreadPrice);
+   if(g_maxSpreadPrice <= 0.0)
+      Print("ERROR: max spread resolved to zero. Every entry will be blocked.");
+
    return(INIT_SUCCEEDED);
   }
 
@@ -478,9 +500,9 @@ bool MayOpen(datetime now, string &reason)
    if(g_consecLosses >= InpMaxConsecLosses)      { reason = "loss streak";       return(false); }
 
    double spread = CurrentSpread();
-   if(spread > InpMaxSpread)
+   if(spread > g_maxSpreadPrice)
      {
-      reason = StringFormat("spread %.2f > %.2f", spread, InpMaxSpread);
+      reason = StringFormat("spread %.2f > %.2f", spread, g_maxSpreadPrice);
       return(false);
      }
    if(!TerminalInfoInteger(TERMINAL_TRADE_ALLOWED)) { reason = "AutoTrading off";  return(false); }
@@ -848,7 +870,7 @@ void DrawPanel()
       "-----------------------------------------\n"
       "server %s   (GMT%+d)   GMT hour %02d\n"
       "session %02d-%02d GMT      in session: %s\n"
-      "spread %.2f  (max %.2f)\n"
+      "spread %.2f  (max %.2f = %d pts)\n"
       "-----------------------------------------\n"
       "equity      %.2f\n"
       "day P/L     %.2f  (%+.2f%%)  limit %.1f%%\n"
@@ -858,7 +880,7 @@ void DrawPanel()
       _Symbol,
       TimeToString(now, TIME_DATE|TIME_MINUTES), g_gmtOffsetHrs, GmtHour(now),
       InpSessionStartHour, InpSessionEndHour, (InSession(now) ? "yes" : "no"),
-      CurrentSpread(), InpMaxSpread,
+      CurrentSpread(), g_maxSpreadPrice, InpMaxSpreadPoints,
       equity,
       dayPnl, dayPct, InpMaxDailyLossPct,
       g_tradesToday, InpMaxTradesPerDay, g_consecLosses, InpMaxConsecLosses,

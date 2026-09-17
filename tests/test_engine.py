@@ -190,3 +190,36 @@ def test_session_close_flattens_open_risk():
     t = res.trades.iloc[0]
     assert t["exit_reason"] == ExitReason.SESSION_CLOSE.value
     assert pd.Timestamp(t["exit_time"]).hour == 17
+
+
+def test_wide_spread_blocks_the_entry():
+    """Mirrors the EA's spread gate: a quote too wide to trade is skipped."""
+    df = _frame([[2000, 2001, 1999, 2000]] * 5)
+    cfg = RiskConfig(
+        sessions=(SessionWindow(0, 24),), flat_by_hour=None,
+        no_new_trades_after_hour=None, min_stop_distance=0.5,
+        max_stop_distance=100.0, max_spread=0.50,
+    )
+    broker = SimBroker(XAUUSD, SpreadModel(base=2.00, hour_multipliers={}, rollover_hour=None), 0.0)
+    eng = BacktestEngine(
+        SignalOnBar(1, 1990.0, 2050.0), RiskManager(cfg, XAUUSD, 100_000.0),
+        broker, XAUUSD, 100_000.0, max_bars_in_trade=None,
+    )
+    res = eng.run(df)
+    assert res.trades.empty
+    assert res.blocked["spread_too_wide"] == 1
+
+
+def test_normal_spread_still_trades():
+    df = _frame([[2000, 2001, 1999, 2000]] * 5)
+    cfg = RiskConfig(
+        sessions=(SessionWindow(0, 24),), flat_by_hour=None,
+        no_new_trades_after_hour=None, min_stop_distance=0.5,
+        max_stop_distance=100.0, max_spread=0.50,
+    )
+    broker = SimBroker(XAUUSD, SpreadModel(base=0.20, hour_multipliers={}, rollover_hour=None), 0.0)
+    eng = BacktestEngine(
+        SignalOnBar(1, 1990.0, 2050.0), RiskManager(cfg, XAUUSD, 100_000.0),
+        broker, XAUUSD, 100_000.0, max_bars_in_trade=None,
+    )
+    assert len(eng.run(df).trades) == 1

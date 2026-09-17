@@ -40,6 +40,7 @@ class RiskConfig:
     max_consecutive_losses: int = 4       # cool off for the rest of the day
     max_concurrent_positions: int = 1
     compounding: bool = True              # size off live equity vs initial capital
+    max_spread: float | None = None       # USD/oz; refuse entries above this
     min_stop_distance: float = 0.50       # USD/oz; refuse absurdly tight stops
     max_stop_distance: float = 30.0       # USD/oz; refuse absurdly wide stops
     trading_days: tuple[int, ...] = (0, 1, 2, 3, 4)  # Mon..Fri
@@ -83,6 +84,15 @@ class RiskManager:
 
     def in_news_blackout(self, ts: pd.Timestamp) -> bool:
         return any(start <= ts < end for start, end in self.cfg.news_blackout)
+
+    def spread_ok(self, spread: float) -> bool:
+        """Mirror of the EA's spread filter.
+
+        Without this the backtest would take entries the live EA refuses, and
+        the two would quietly describe different systems -- exactly the gap
+        that makes a backtest stop predicting anything.
+        """
+        return self.cfg.max_spread is None or spread <= self.cfg.max_spread
 
     def may_open(self, ts: pd.Timestamp, open_positions: int) -> tuple[bool, str]:
         """Gate on every condition that can forbid a *new* position."""
