@@ -124,6 +124,7 @@ int      g_gmtOffsetHrs  = 0;
 int      g_dayOfYear     = -1;
 double   g_dayStartEquity= 0.0;
 int      g_tradesToday   = 0;
+double   g_dayRealisedPnl = 0.0;  // from closed deals, not equity
 int      g_consecLosses  = 0;
 bool     g_halted        = false;
 string   g_haltReason    = "";
@@ -387,6 +388,7 @@ void ResetDailyState(bool firstRun)
    TimeToStruct(ToGmt(TimeCurrent()), t);
    g_dayOfYear      = t.day_of_year;
    g_dayStartEquity = AccountInfoDouble(ACCOUNT_EQUITY);
+   g_dayRealisedPnl = 0.0;
    g_tradesToday    = 0;
    g_consecLosses   = 0;
    g_halted         = false;
@@ -420,9 +422,10 @@ void UpdateConsecutiveLossesFromHistory()
    if(!HistorySelect(dayStart, TimeCurrent() + 60))
       return;
 
-   int trades = 0;
-   int streak = 0;
-   int total  = HistoryDealsTotal();
+   int    trades   = 0;
+   int    streak   = 0;
+   double realised = 0.0;
+   int    total    = HistoryDealsTotal();
 
    for(int i = 0; i < total; i++)
      {
@@ -436,23 +439,36 @@ void UpdateConsecutiveLossesFromHistory()
       double profit = HistoryDealGetDouble(ticket, DEAL_PROFIT)
                     + HistoryDealGetDouble(ticket, DEAL_SWAP)
                     + HistoryDealGetDouble(ticket, DEAL_COMMISSION);
+      realised += profit;
       if(profit < 0.0) streak++;
       else             streak = 0;
      }
 
-   g_tradesToday  = trades;
-   g_consecLosses = streak;
+   g_tradesToday    = trades;
+   g_consecLosses   = streak;
+   g_dayRealisedPnl = realised;
 
+   // The day's loss is summed from CLOSED DEALS, not from an equity
+   // difference, and the limit is sized against LIVE equity rather than the
+   // equity captured at the start of the day.
+   //
+   // Both details matter the moment money moves in or out of the account. An
+   // equity difference counts a deposit as profit and a withdrawal as loss,
+   // and a start-of-day baseline goes stale: fund an account from 100 to 2000
+   // mid-session and the 2% limit stays pinned at 2.00, so the first ordinary
+   // losing trade halts the bot for the rest of the day. Deals only ever
+   // reflect trading, and live equity always reflects the account as it is now.
    double equity = AccountInfoDouble(ACCOUNT_EQUITY);
-   double dayPnl = equity - g_dayStartEquity;
-   double limit  = -MathAbs(g_dayStartEquity * InpMaxDailyLossPct / 100.0);
+   double base   = (equity > 0.0) ? equity : g_dayStartEquity;
+   double limit  = -MathAbs(base * InpMaxDailyLossPct / 100.0);
 
-   if(dayPnl <= limit && !g_halted)
+   if(g_dayRealisedPnl <= limit && !g_halted)
      {
       g_halted = true;
       g_haltReason = "daily loss limit";
-      PrintFormat("HALT: daily loss %.2f reached the %.1f%% limit (%.2f). No more trades today.",
-                  dayPnl, InpMaxDailyLossPct, limit);
+      PrintFormat("HALT: realised %.2f today, past the %.1f%% limit (%.2f on %.2f equity). "
+                  "No more trades today.",
+                  g_dayRealisedPnl, InpMaxDailyLossPct, limit, base);
      }
    else if(g_consecLosses >= InpMaxConsecLosses && !g_halted)
      {
@@ -864,8 +880,8 @@ void ManageOpenPosition(datetime now)
 void DrawPanel()
   {
    double equity  = AccountInfoDouble(ACCOUNT_EQUITY);
-   double dayPnl  = equity - g_dayStartEquity;
-   double dayPct  = (g_dayStartEquity > 0.0) ? dayPnl / g_dayStartEquity * 100.0 : 0.0;
+   double dayPnl  = g_dayRealisedPnl;                       // closed trades only
+   double dayPct  = (equity > 0.0) ? dayPnl / equity * 100.0 : 0.0;
    datetime now   = TimeCurrent();
 
    string txt = StringFormat(
