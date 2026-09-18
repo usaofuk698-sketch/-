@@ -45,9 +45,9 @@ enum ENUM_TZ_MODE
 //+------------------------------------------------------------------+
 input group "=== Risk (read this section first) ==="
 input double InpRiskPercent        = 0.5;    // Risk per trade (% of equity)
-input double InpMaxDailyLossPct    = 2.0;    // Daily loss limit (%) - stops for the day
-input int    InpMaxTradesPerDay    = 5;      // Max trades per day
-input int    InpMaxConsecLosses    = 4;      // Cool off after N losses in a row
+input double InpMaxDailyLossPct    = 2.0;    // Daily loss limit (%). 0 = OFF
+input int    InpMaxTradesPerDay    = 5;      // Max trades per day. 0 = unlimited
+input int    InpMaxConsecLosses    = 4;      // Cool off after N losses in a row. 0 = OFF
 input double InpMinStopDistance    = 0.50;   // Refuse stops tighter than this (price units)
 input double InpMaxStopDistance    = 30.0;   // Refuse stops wider than this (price units)
 input double InpFixedLots          = 0.0;    // >0 overrides risk sizing (NOT recommended)
@@ -211,6 +211,13 @@ int OnInit()
                   "the rollover blowout.", g_maxSpreadPrice);
    if(g_maxSpreadPrice <= 0.0)
       Print("ERROR: max spread resolved to zero. Every entry will be blocked.");
+
+   if(InpMaxDailyLossPct <= 0.0 || InpMaxConsecLosses <= 0 || InpMaxTradesPerDay <= 0)
+      PrintFormat("RISK GUARDS DISABLED -> daily loss: %s | loss streak: %s | trades/day: %s. "
+                  "Nothing will stop this EA inside a losing day except the per-trade stop.",
+                  (InpMaxDailyLossPct <= 0.0 ? "OFF" : "on"),
+                  (InpMaxConsecLosses <= 0   ? "OFF" : "on"),
+                  (InpMaxTradesPerDay <= 0   ? "OFF" : "on"));
 
    return(INIT_SUCCEEDED);
   }
@@ -462,7 +469,13 @@ void UpdateConsecutiveLossesFromHistory()
    double base   = (equity > 0.0) ? equity : g_dayStartEquity;
    double limit  = -MathAbs(base * InpMaxDailyLossPct / 100.0);
 
-   if(g_dayRealisedPnl <= limit && !g_halted)
+   // A limit of zero means OFF, not "halt at zero loss". Without this guard the
+   // obvious way to disable the rule does the opposite of what it looks like:
+   // the threshold becomes 0.00, and the first losing trade -- or even a
+   // scratch -- trips it and stops the bot for the rest of the day.
+   bool dailyLossActive = (InpMaxDailyLossPct > 0.0);
+
+   if(dailyLossActive && g_dayRealisedPnl <= limit && !g_halted)
      {
       g_halted = true;
       g_haltReason = "daily loss limit";
@@ -470,7 +483,7 @@ void UpdateConsecutiveLossesFromHistory()
                   "No more trades today.",
                   g_dayRealisedPnl, InpMaxDailyLossPct, limit, base);
      }
-   else if(g_consecLosses >= InpMaxConsecLosses && !g_halted)
+   else if(InpMaxConsecLosses > 0 && g_consecLosses >= InpMaxConsecLosses && !g_halted)
      {
       g_halted = true;
       g_haltReason = "consecutive losses";
@@ -515,8 +528,10 @@ bool MayOpen(datetime now, string &reason)
    if(!IsTradingDay(GmtDayOfWeek(now)))          { reason = "not a trading day"; return(false); }
    if(!InSession(now))                           { reason = "outside session";   return(false); }
    if(GmtHour(now) >= InpNoNewTradesAfter)       { reason = "late in session";   return(false); }
-   if(g_tradesToday >= InpMaxTradesPerDay)       { reason = "max trades/day";    return(false); }
-   if(g_consecLosses >= InpMaxConsecLosses)      { reason = "loss streak";       return(false); }
+   if(InpMaxTradesPerDay > 0 && g_tradesToday >= InpMaxTradesPerDay)
+      { reason = "max trades/day"; return(false); }
+   if(InpMaxConsecLosses > 0 && g_consecLosses >= InpMaxConsecLosses)
+      { reason = "loss streak"; return(false); }
 
    double spread = CurrentSpread();
    if(spread > g_maxSpreadPrice)

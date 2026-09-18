@@ -34,10 +34,14 @@ class SessionWindow:
 @dataclass
 class RiskConfig:
     risk_per_trade_pct: float = 0.5       # % of equity risked per trade
-    max_daily_loss_pct: float = 2.0       # stop trading for the day past this
+    # The three limits below all treat 0 as OFF. Without that, the obvious way
+    # to disable one does the opposite: a 0% daily loss limit means "halt at
+    # zero loss", a 0 trade cap means "never trade", and a 0 loss streak means
+    # "halted from the start".
+    max_daily_loss_pct: float = 2.0       # stop trading for the day past this. 0 = off
     max_daily_profit_pct: float | None = None  # optional: bank the day and stop
-    max_trades_per_day: int = 5
-    max_consecutive_losses: int = 4       # cool off for the rest of the day
+    max_trades_per_day: int = 5           # 0 = unlimited
+    max_consecutive_losses: int = 4       # cool off for the rest of the day. 0 = off
     max_concurrent_positions: int = 1
     compounding: bool = True              # size off live equity vs initial capital
     max_spread: float | None = None       # USD/oz; refuse entries above this
@@ -114,9 +118,9 @@ class RiskManager:
             return False, self.state.halt_reason
         if open_positions >= self.cfg.max_concurrent_positions:
             return False, "max_concurrent_positions"
-        if self.state.trades >= self.cfg.max_trades_per_day:
+        if 0 < self.cfg.max_trades_per_day <= self.state.trades:
             return False, "max_trades_per_day"
-        if self.state.consecutive_losses >= self.cfg.max_consecutive_losses:
+        if 0 < self.cfg.max_consecutive_losses <= self.state.consecutive_losses:
             self._halt("max_consecutive_losses")
             return False, "max_consecutive_losses"
         if not self.in_session(ts):
@@ -180,7 +184,7 @@ class RiskManager:
 
         base = self.state.start_equity or self.initial_capital
         loss_limit = -abs(base * self.cfg.max_daily_loss_pct / 100.0)
-        if self.state.realised_pnl <= loss_limit:
+        if self.cfg.max_daily_loss_pct > 0 and self.state.realised_pnl <= loss_limit:
             self._halt("daily_loss_limit")
         elif self.cfg.max_daily_profit_pct is not None:
             target = base * self.cfg.max_daily_profit_pct / 100.0

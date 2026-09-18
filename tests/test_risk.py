@@ -108,3 +108,46 @@ def test_spread_filter_mirrors_the_ea():
 
 def test_spread_filter_is_off_by_default():
     assert _rm().spread_ok(999.0), "no limit configured means no filtering"
+
+
+def test_zero_daily_loss_limit_means_off_not_halt_at_zero():
+    """The obvious way to disable the rule must disable it.
+
+    Without an explicit guard a 0% limit computes a threshold of 0.00, so the
+    first losing trade -- or even a scratch -- trips it and stops trading for
+    the day: the exact opposite of what setting it to zero looks like.
+    """
+    rm = _rm(max_daily_loss_pct=0.0, max_trades_per_day=99, max_consecutive_losses=0)
+    ts = pd.Timestamp("2024-01-03 10:00")
+    rm.on_bar(ts, 10_000.0)
+    for _ in range(20):
+        rm.on_trade_closed(-500.0, 5_000.0)
+    ok, why = rm.may_open(ts, 0)
+    assert ok, f"halted with limits off: {why}"
+
+
+def test_zero_trade_cap_means_unlimited():
+    rm = _rm(max_trades_per_day=0, max_daily_loss_pct=0.0, max_consecutive_losses=0)
+    ts = pd.Timestamp("2024-01-03 10:00")
+    rm.on_bar(ts, 10_000.0)
+    for _ in range(50):
+        rm.on_trade_closed(10.0, 10_000.0)
+    assert rm.may_open(ts, 0)[0]
+
+
+def test_zero_loss_streak_means_off():
+    rm = _rm(max_consecutive_losses=0, max_daily_loss_pct=0.0, max_trades_per_day=99)
+    ts = pd.Timestamp("2024-01-03 10:00")
+    rm.on_bar(ts, 10_000.0)
+    for _ in range(15):
+        rm.on_trade_closed(-10.0, 9_900.0)
+    assert rm.may_open(ts, 0)[0]
+
+
+def test_limits_still_work_when_set():
+    """Guard the guard: turning the rules off must not turn them off always."""
+    rm = _rm(max_daily_loss_pct=2.0, max_trades_per_day=99, max_consecutive_losses=0)
+    ts = pd.Timestamp("2024-01-03 10:00")
+    rm.on_bar(ts, 10_000.0)
+    rm.on_trade_closed(-250.0, 9_750.0)
+    assert not rm.may_open(ts, 0)[0]
