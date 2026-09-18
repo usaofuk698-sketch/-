@@ -1,0 +1,82 @@
+# ---------------------------------------------------------------------------
+# XauPulse — mean-reversion scalper for XAUUSD M5.
+#
+# Mirrors mt5/XauPulse_M5.mq5. Replace the cost figures with numbers from YOUR
+# broker: a scalper pays the spread on every one of many trades, so these
+# decide the result far more than any strategy parameter does.
+# ---------------------------------------------------------------------------
+symbol: XAUUSD
+timeframe: 5min
+max_bars_in_trade: 24          # 2 hours on M5; a scalp that old is not working
+
+account:
+  initial_capital: 2000
+
+data:
+  path: null
+  timezone: UTC
+
+contract:
+  symbol: XAUUSD
+  contract_size: 100
+  tick_size: 0.001             # 3-digit gold feed (e.g. Exness XAUUSDm)
+  min_lot: 0.01
+  lot_step: 0.01
+  commission_per_lot_per_side: 0.0
+
+costs:
+  spread:
+    base: 0.26                 # measured on a live Exness XAUUSDm feed
+    hour_multipliers: {}
+    rollover_hour: 0
+    rollover_spread: 2.00
+  slippage: 0.03
+
+risk:
+  risk_per_trade_pct: 0.5
+  max_daily_loss_pct: 3.0
+  max_trades_per_day: 12
+  max_consecutive_losses: 6
+  max_concurrent_positions: 1
+  compounding: true
+  min_stop_distance: 0.30
+  max_stop_distance: 30.0
+  max_spread: 0.50
+  min_target_spread_ratio: 5.0 # the binding constraint; see the strategy docstring
+  trading_days: [0, 1, 2, 3, 4]
+  sessions:
+    - start_hour: 0
+      end_hour: 24
+  no_new_trades_after_hour: 24
+  flat_by_hour: 24
+
+strategy:
+  name: mean_reversion_scalper
+  params:
+    ema_period: 20
+    adx_period: 14
+    adx_max: 50.0              # ABOVE this = trending. Raising it is dangerous.
+    atr_period: 14
+    regime_lookback: 288
+    atr_min_mult: 0.55
+    atr_max_mult: 3.00
+    stretch_atr: 0.60
+    rsi_period: 7
+    rsi_oversold: 38.0
+    rsi_overbought: 62.0
+    swing_lookback: 6
+    stop_atr_buffer: 0.25
+    min_stop_atr_mult: 1.00
+    reward_risk: 1.20
+    min_target_spread_ratio: 5.0
+    breakeven_at_r: 0.8
+    breakeven_offset_atr: 0.05
+    trail_at_r: null
+
+walkforward:
+  train_bars: 30000
+  test_bars: 10000
+  grid:
+    adx_max: [40.0, 50.0, 60.0]
+    stretch_atr: [0.5, 0.6, 0.8]
+    reward_risk: [1.1, 1.2, 1.4]

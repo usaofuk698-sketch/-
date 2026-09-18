@@ -221,6 +221,11 @@ class BacktestEngine:
 
         fill = self.broker.entry_fill(sig.side, bar_open, spread)
 
+        if sig.take_profit is not None and not self.risk.target_worth_the_spread(
+            abs(sig.take_profit - fill), spread
+        ):
+            return None, "target_not_worth_spread"
+
         # The stop was computed on the previous close. If this bar opened at or
         # through it, the trade is already dead -- do not enter it.
         if sig.side is Side.LONG and fill <= sig.stop_loss:

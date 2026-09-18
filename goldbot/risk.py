@@ -41,6 +41,7 @@ class RiskConfig:
     max_concurrent_positions: int = 1
     compounding: bool = True              # size off live equity vs initial capital
     max_spread: float | None = None       # USD/oz; refuse entries above this
+    min_target_spread_ratio: float | None = None  # target must be >= N x spread
     min_stop_distance: float = 0.50       # USD/oz; refuse absurdly tight stops
     max_stop_distance: float = 30.0       # USD/oz; refuse absurdly wide stops
     trading_days: tuple[int, ...] = (0, 1, 2, 3, 4)  # Mon..Fri
@@ -93,6 +94,19 @@ class RiskManager:
         that makes a backtest stop predicting anything.
         """
         return self.cfg.max_spread is None or spread <= self.cfg.max_spread
+
+    def target_worth_the_spread(self, target_distance: float, spread: float) -> bool:
+        """Reject a setup whose target is too small to survive its own costs.
+
+        A scalper pays the spread on every trade, and its targets are a fraction
+        of a swing trader's. A 0.26 spread against a 0.60 target is 43% of the
+        gross move gone before anything else -- no hit rate recovers from that.
+        The ratio is the floor below which a setup is not worth taking, however
+        good the signal looks.
+        """
+        if self.cfg.min_target_spread_ratio is None or spread <= 0:
+            return True
+        return target_distance >= self.cfg.min_target_spread_ratio * spread
 
     def may_open(self, ts: pd.Timestamp, open_positions: int) -> tuple[bool, str]:
         """Gate on every condition that can forbid a *new* position."""
