@@ -40,6 +40,12 @@ PARAM_MAP = {
     "InpMinTargetSpreadRatio": "min_target_spread_ratio",
     "InpBreakevenAtR": "breakeven_at_r",
     "InpBreakevenOffAtr": "breakeven_offset_atr",
+    # v2 entry-quality filters
+    "InpHtfEmaPeriod": "htf_ema_period",
+    "InpHtfSlopeLookback": "htf_slope_lookback",
+    "InpHtfMaxSlopeAtr": "htf_max_slope_atr",
+    "InpClosePositionMin": "close_position_min",
+    "InpDivergenceLookback": "divergence_lookback",
 }
 
 
@@ -81,6 +87,20 @@ def test_ea_enforces_the_cost_rule():
     assert "targetDistance" in src
 
 
+def test_ea_has_the_entry_quality_gates():
+    """The v2 filters must exist in the EA, not only in the Python strategy."""
+    src = MQ5.read_text()
+    for token in ("InpClosePositionMin", "InpHtfMaxSlopeAtr", "closePos", "htfSlope"):
+        assert token in src, f"{token} missing from the EA"
+
+
+def test_ea_warmup_covers_the_long_ema():
+    """The HTF filter needs InpHtfEmaPeriod + slope lookback bars; trading
+    before that would read an EMA that is still settling."""
+    src = MQ5.read_text()
+    assert "InpHtfEmaPeriod + InpHtfSlopeLookback" in src
+
+
 def test_ea_reads_only_closed_bars():
     src = MQ5.read_text()
     assert "CopyRates(_Symbol, PERIOD_CURRENT, 1," in src, "must start at shift 1"
@@ -91,8 +111,10 @@ def mql5_entry(i: int, feat, p: MeanReversionScalperParams):
     """Mirror of TryEntry() in XauPulse_M5.mq5."""
     a = {c: feat[c].to_numpy(float) for c in
          ("open", "high", "low", "close", "ema", "atr", "adx", "rsi", "atr_med",
-          "swing_low", "swing_high")}
-    if i < max(p.regime_lookback, p.ema_period) + 10:
+          "swing_low", "swing_high", "htf_slope", "close_pos",
+          "prior_low", "prior_high", "prior_rsi_low", "prior_rsi_high")}
+    if i < max(p.regime_lookback, p.ema_period,
+               p.htf_ema_period + p.htf_slope_lookback) + 10:
         return None
     atr_v, med, adx_v, rsi_v = a["atr"][i], a["atr_med"][i], a["adx"][i], a["rsi"][i]
     ema_v, close, open_ = a["ema"][i], a["close"][i], a["open"][i]
@@ -107,8 +129,38 @@ def mql5_entry(i: int, feat, p: MeanReversionScalperParams):
         return None
 
     stretch = (close - ema_v) / atr_v
-    long_ok = stretch <= -p.stretch_atr and rsi_v <= p.rsi_oversold and close > open_
-    short_ok = stretch >= p.stretch_atr and rsi_v >= p.rsi_overbought and close < open_
+    high_v, low_v = a["high"][i], a["low"][i]
+
+    # gate 1: reversal-bar quality
+    close_pos = a["close_pos"][i]
+    if np.isfinite(close_pos):
+        long_bar = close_pos >= p.close_position_min
+        short_bar = (1.0 - close_pos) >= p.close_position_min
+    else:
+        long_bar = short_bar = False
+
+    # gate 2: higher-timeframe slope
+    htf_slope = a["htf_slope"][i]
+    slope_atr = htf_slope / atr_v if (np.isfinite(htf_slope) and atr_v > 0) else 0.0
+    if p.htf_max_slope_atr > 0.0:
+        long_htf = slope_atr >= -p.htf_max_slope_atr
+        short_htf = slope_atr <= p.htf_max_slope_atr
+    else:
+        long_htf = short_htf = True
+
+    # gate 3: optional divergence
+    if p.require_divergence:
+        pl, prl = a["prior_low"][i], a["prior_rsi_low"][i]
+        ph, prh = a["prior_high"][i], a["prior_rsi_high"][i]
+        long_div = np.isfinite(pl) and np.isfinite(prl) and low_v <= pl and rsi_v > prl
+        short_div = np.isfinite(ph) and np.isfinite(prh) and high_v >= ph and rsi_v < prh
+    else:
+        long_div = short_div = True
+
+    long_ok = (stretch <= -p.stretch_atr and rsi_v <= p.rsi_oversold and close > open_
+               and long_bar and long_htf and long_div)
+    short_ok = (stretch >= p.stretch_atr and rsi_v >= p.rsi_overbought and close < open_
+                and short_bar and short_htf and short_div)
     if long_ok == short_ok:
         return None
 

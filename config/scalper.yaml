@@ -66,8 +66,15 @@ strategy:
     rsi_overbought: 62.0
     swing_lookback: 6
     stop_atr_buffer: 0.25
-    min_stop_atr_mult: 1.00
-    reward_risk: 1.20
+    min_stop_atr_mult: 1.30    # v2: wider stop cuts the cost share
+    reward_risk: 1.20          # measured best of 1.0-3.0; higher is worse, not better
+    # -- v2 entry-quality gates
+    htf_ema_period: 100        # long EMA standing in for the higher timeframe
+    htf_slope_lookback: 20
+    htf_max_slope_atr: 0.06    # do not fade a higher-timeframe trend (0 = off)
+    close_position_min: 0.55   # reversal bar must close in the top/bottom 55%
+    require_divergence: false  # momentum divergence; cuts frequency ~27%
+    divergence_lookback: 12
     min_target_spread_ratio: 5.0
     breakeven_at_r: 0.8
     breakeven_offset_atr: 0.05

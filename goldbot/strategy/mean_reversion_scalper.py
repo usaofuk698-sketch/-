@@ -69,9 +69,20 @@ class MeanReversionScalperParams(StrategyParams):
     # -- stop and target
     swing_lookback: int = 6
     stop_atr_buffer: float = 0.25
-    min_stop_atr_mult: float = 1.00
+    min_stop_atr_mult: float = 1.30
     reward_risk: float = 1.20         # mean reversion: high hit rate, modest R
     min_target_spread_ratio: float = 5.0   # target must be >= N x the spread
+    # -- entry-quality filters (v2)
+    #
+    # These raise the bar for what counts as a setup. Each is motivated by a
+    # specific way the base signal goes wrong, not found by scanning data:
+    # overfitting a filter is worse than not having one.
+    htf_ema_period: int = 100         # ~M15 trend seen from M5
+    htf_slope_lookback: int = 20
+    htf_max_slope_atr: float = 0.06   # per-bar EMA slope, in ATR. 0 disables.
+    close_position_min: float = 0.55  # where in the bar's range it closed
+    require_divergence: bool = False  # momentum divergence at the extreme
+    divergence_lookback: int = 12
     # -- management
     breakeven_at_r: float | None = 0.8
     breakeven_offset_atr: float = 0.05
@@ -83,7 +94,8 @@ class MeanReversionScalper(Strategy):
 
     _FEATURE_COLS = (
         "open", "high", "low", "close", "ema", "atr", "adx", "rsi",
-        "atr_med", "swing_low", "swing_high",
+        "atr_med", "swing_low", "swing_high", "htf_ema", "htf_slope",
+        "close_pos", "prior_low", "prior_high", "prior_rsi_low", "prior_rsi_high",
     )
 
     def __init__(self, params: MeanReversionScalperParams | None = None):
@@ -94,7 +106,8 @@ class MeanReversionScalper(Strategy):
     @property
     def warmup(self) -> int:
         p = self.params
-        return max(p.regime_lookback, p.ema_period, p.adx_period) + 50
+        return max(p.regime_lookback, p.ema_period, p.adx_period,
+                   p.htf_ema_period + p.htf_slope_lookback) + 50
 
     def _bind(self, feat: pd.DataFrame) -> None:
         if self._n == len(feat) and self._a:
@@ -117,6 +130,27 @@ class MeanReversionScalper(Strategy):
         )
         out["swing_low"] = ind.rolling_low(l, p.swing_lookback)
         out["swing_high"] = ind.rolling_high(h, p.swing_lookback)
+
+        # Higher-timeframe context, approximated with a long EMA on this
+        # timeframe rather than by resampling: one series, identical arithmetic
+        # in Python and MQL5, and no bar-alignment question to get wrong.
+        out["htf_ema"] = ind.ema(c, p.htf_ema_period)
+        out["htf_slope"] = (
+            out["htf_ema"] - out["htf_ema"].shift(p.htf_slope_lookback)
+        ) / float(p.htf_slope_lookback)
+
+        # Where in its own range the bar closed. A long that closes near the
+        # low of its bar is not a rejection of lower prices, it is a pause on
+        # the way down.
+        rng = (h - l).replace(0.0, np.nan)
+        out["close_pos"] = (c - l) / rng
+
+        # Momentum divergence: the prior extreme of price and of RSI over the
+        # lookback, excluding the current bar.
+        out["prior_low"] = l.shift(1).rolling(p.divergence_lookback, min_periods=2).min()
+        out["prior_high"] = h.shift(1).rolling(p.divergence_lookback, min_periods=2).max()
+        out["prior_rsi_low"] = out["rsi"].shift(1).rolling(p.divergence_lookback, min_periods=2).min()
+        out["prior_rsi_high"] = out["rsi"].shift(1).rolling(p.divergence_lookback, min_periods=2).max()
 
         self._a = {col: out[col].to_numpy(dtype=float) for col in self._FEATURE_COLS}
         self._n = len(out)
@@ -154,16 +188,57 @@ class MeanReversionScalper(Strategy):
             return None
 
         stretch = (close - ema_v) / atr_v
+        high_v, low_v = a["high"][i], a["low"][i]
+        close_pos = a["close_pos"][i]
+        htf_slope = a["htf_slope"][i]
+
+        # Quality gate 1: the reversal bar must actually reject the extreme.
+        # A bar that closes near its own low is not a bounce.
+        if np.isfinite(close_pos):
+            long_bar_ok = close_pos >= p.close_position_min
+            short_bar_ok = (1.0 - close_pos) >= p.close_position_min
+        else:
+            long_bar_ok = short_bar_ok = False
+
+        # Quality gate 2: do not fade a higher-timeframe trend. M5 ADX only
+        # sees the last few bars; a dip inside a sustained move down looks
+        # identical to a dip in a range until you look further out.
+        slope_atr = htf_slope / atr_v if (np.isfinite(htf_slope) and atr_v > 0) else 0.0
+        if p.htf_max_slope_atr > 0.0:
+            long_htf_ok = slope_atr >= -p.htf_max_slope_atr
+            short_htf_ok = slope_atr <= p.htf_max_slope_atr
+        else:
+            long_htf_ok = short_htf_ok = True
+
+        # Quality gate 3 (optional): momentum divergence. Price makes the lower
+        # low but momentum does not -- the move down is running out of force.
+        if p.require_divergence:
+            pl, prl = a["prior_low"][i], a["prior_rsi_low"][i]
+            ph, prh = a["prior_high"][i], a["prior_rsi_high"][i]
+            long_div_ok = (
+                np.isfinite(pl) and np.isfinite(prl) and low_v <= pl and rsi_v > prl
+            )
+            short_div_ok = (
+                np.isfinite(ph) and np.isfinite(prh) and high_v >= ph and rsi_v < prh
+            )
+        else:
+            long_div_ok = short_div_ok = True
 
         long_ok = (
             stretch <= -p.stretch_atr
             and rsi_v <= p.rsi_oversold
             and close > open_          # the turn has started
+            and long_bar_ok
+            and long_htf_ok
+            and long_div_ok
         )
         short_ok = (
             stretch >= p.stretch_atr
             and rsi_v >= p.rsi_overbought
             and close < open_
+            and short_bar_ok
+            and short_htf_ok
+            and short_div_ok
         )
         if long_ok == short_ok:
             return None

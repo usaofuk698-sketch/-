@@ -105,9 +105,17 @@ input double InpRsiOverbought      = 62.0;
 input group "=== Strategy: stop and target ==="
 input int    InpSwingLookback      = 6;
 input double InpStopAtrBuffer      = 0.25;   // Padding beyond the swing extreme (xATR)
-input double InpMinStopAtrMult     = 1.00;   // Floor on stop distance (xATR)
+input double InpMinStopAtrMult     = 1.30;   // Floor on stop distance (xATR)
 input double InpRewardRisk         = 1.20;   // Target as a multiple of the stop
 input double InpMinTargetSpreadRatio = 5.0;  // Target must be >= N x the live spread
+
+input group "=== Strategy: entry quality (v2) ==="
+input int    InpHtfEmaPeriod       = 100;    // Long EMA standing in for the higher timeframe
+input int    InpHtfSlopeLookback   = 20;     // Bars used to measure its slope
+input double InpHtfMaxSlopeAtr     = 0.06;   // Max |slope| per bar in ATR (0 = filter off)
+input double InpClosePositionMin   = 0.55;   // Where in its range the reversal bar closed
+input bool   InpRequireDivergence  = false;  // Demand momentum divergence at the extreme
+input int    InpDivergenceLookback = 12;
 
 input group "=== Strategy: in-trade management ==="
 input bool   InpUseBreakeven       = true;
@@ -121,6 +129,7 @@ input bool   InpShowPanel          = true;
 //| GLOBALS                                                          |
 //+------------------------------------------------------------------+
 int      hEma     = INVALID_HANDLE;
+int      hHtfEma  = INVALID_HANDLE;
 int      hAtr     = INVALID_HANDLE;
 int      hAdx     = INVALID_HANDLE;
 int      hRsi     = INVALID_HANDLE;
@@ -165,12 +174,13 @@ int OnInit()
                   "Every period input is counted in BARS, so they mean different "
                   "lengths of time on another timeframe.", EnumToString((ENUM_TIMEFRAMES)Period()));
 
-   hEma      = iMA(_Symbol, PERIOD_CURRENT, InpEmaPeriod, 0, MODE_EMA, PRICE_CLOSE);
+   hEma      = iMA(_Symbol, PERIOD_CURRENT, InpEmaPeriod,    0, MODE_EMA, PRICE_CLOSE);
+   hHtfEma   = iMA(_Symbol, PERIOD_CURRENT, InpHtfEmaPeriod, 0, MODE_EMA, PRICE_CLOSE);
    hAtr      = iATR(_Symbol, PERIOD_CURRENT, InpAtrPeriod);
    hAdx      = iADX(_Symbol, PERIOD_CURRENT, InpAdxPeriod);
    hRsi      = iRSI(_Symbol, PERIOD_CURRENT, InpRsiPeriod, PRICE_CLOSE);
 
-   if(hEma==INVALID_HANDLE || hAtr==INVALID_HANDLE ||
+   if(hEma==INVALID_HANDLE || hHtfEma==INVALID_HANDLE || hAtr==INVALID_HANDLE ||
       hAdx==INVALID_HANDLE || hRsi==INVALID_HANDLE)
      {
       Print("ERROR: failed to create one or more indicator handles.");
@@ -225,6 +235,7 @@ int OnInit()
 void OnDeinit(const int reason)
   {
    IndicatorRelease(hEma);
+   IndicatorRelease(hHtfEma);
    IndicatorRelease(hAtr);
    IndicatorRelease(hAdx);
    IndicatorRelease(hRsi);
@@ -276,6 +287,11 @@ bool ValidateInputs()
    if(InpStretchAtr <= 0.0)          { Print("ERROR: StretchAtr must be > 0"); return(false); }
    if(InpRsiOversold >= InpRsiOverbought)
      { Print("ERROR: RsiOversold must be < RsiOverbought"); return(false); }
+   if(InpHtfEmaPeriod < 2)           { Print("ERROR: HtfEmaPeriod must be >= 2"); return(false); }
+   if(InpHtfSlopeLookback < 1)       { Print("ERROR: HtfSlopeLookback must be >= 1"); return(false); }
+   if(InpClosePositionMin < 0.0 || InpClosePositionMin > 1.0)
+     { Print("ERROR: ClosePositionMin must be in [0, 1]"); return(false); }
+   if(InpDivergenceLookback < 2)     { Print("ERROR: DivergenceLookback must be >= 2"); return(false); }
    if(InpAdxMax <= 0.0 || InpAdxMax > 100.0)
      { Print("ERROR: AdxMax must be in (0, 100]"); return(false); }
    if(InpRegimeLookback < 20)        { Print("ERROR: RegimeLookback must be >= 20"); return(false); }
@@ -649,18 +665,21 @@ double MinStopOffset()
 //+------------------------------------------------------------------+
 void TryEntry()
   {
-   int need = MathMax(InpRegimeLookback, InpEmaPeriod) + 10;
+   int need = MathMax(InpRegimeLookback,
+                      MathMax(InpEmaPeriod, InpHtfEmaPeriod + InpHtfSlopeLookback)) + 10;
    if(Bars(_Symbol, PERIOD_CURRENT) < need)
      {
       g_status = StringFormat("warming up (%d/%d bars)", Bars(_Symbol, PERIOD_CURRENT), need);
       return;
      }
 
-   double ema[], atr[], adx[], rsi[];
-   if(!ReadBuffer(hEma, 0, 1, 2, ema) ||
+   double ema[], atr[], adx[], rsi[], htf[];
+   int rsiBars = MathMax(InpDivergenceLookback + 2, 2);
+   if(!ReadBuffer(hHtfEma, 0, 1, InpHtfSlopeLookback + 1, htf) ||
+      !ReadBuffer(hEma, 0, 1, 2, ema) ||
       !ReadBuffer(hAtr, 0, 1, 2, atr) ||
       !ReadBuffer(hAdx, 0, 1, 2, adx) ||
-      !ReadBuffer(hRsi, 0, 1, 2, rsi))
+      !ReadBuffer(hRsi, 0, 1, rsiBars, rsi))
      {
       g_status = "indicator data not ready";
       return;
@@ -668,7 +687,7 @@ void TryEntry()
 
    MqlRates rates[];
    ArraySetAsSeries(rates, true);
-   int wantBars = MathMax(InpSwingLookback + 3, 5);
+   int wantBars = MathMax(InpSwingLookback + 3, MathMax(InpDivergenceLookback + 2, 5));
    if(CopyRates(_Symbol, PERIOD_CURRENT, 1, wantBars, rates) != wantBars)
      {
       g_status = "price data not ready";
@@ -711,8 +730,43 @@ void TryEntry()
    //--- threshold means the same thing in quiet and volatile markets
    double stretch = (close - emaV) / atrV;
 
-   bool longOk  = (stretch <= -InpStretchAtr) && (rsiV <= InpRsiOversold)   && (close > open);
-   bool shortOk = (stretch >=  InpStretchAtr) && (rsiV >= InpRsiOverbought) && (close < open);
+   //--- gate 1: the reversal bar must actually reject the extreme. A bar that
+   //--- closes near its own low is not a bounce, it is a pause on the way down.
+   double barRange = rates[0].high - rates[0].low;
+   double closePos = (barRange > 0.0) ? (close - rates[0].low) / barRange : 0.5;
+   bool longBarOk  = closePos >= InpClosePositionMin;
+   bool shortBarOk = (1.0 - closePos) >= InpClosePositionMin;
+
+   //--- gate 2: do not fade a higher-timeframe trend. M5 ADX only sees the
+   //--- last few bars; a dip inside a sustained move down looks identical to a
+   //--- dip in a range until you look further out.
+   double htfSlope = (htf[0] - htf[InpHtfSlopeLookback]) / (double)InpHtfSlopeLookback;
+   double slopeAtr = htfSlope / atrV;
+   bool longHtfOk  = (InpHtfMaxSlopeAtr <= 0.0) || (slopeAtr >= -InpHtfMaxSlopeAtr);
+   bool shortHtfOk = (InpHtfMaxSlopeAtr <= 0.0) || (slopeAtr <=  InpHtfMaxSlopeAtr);
+
+   //--- gate 3 (optional): momentum divergence. Price makes the lower low but
+   //--- momentum does not, so the move down is running out of force.
+   bool longDivOk = true, shortDivOk = true;
+   if(InpRequireDivergence)
+     {
+      double priorLow = rates[1].low, priorHigh = rates[1].high;
+      double priorRsiLow = rsi[1],    priorRsiHigh = rsi[1];
+      for(int k = 1; k <= InpDivergenceLookback && k < wantBars && k < rsiBars; k++)
+        {
+         priorLow     = MathMin(priorLow,     rates[k].low);
+         priorHigh    = MathMax(priorHigh,    rates[k].high);
+         priorRsiLow  = MathMin(priorRsiLow,  rsi[k]);
+         priorRsiHigh = MathMax(priorRsiHigh, rsi[k]);
+        }
+      longDivOk  = (rates[0].low  <= priorLow)  && (rsiV > priorRsiLow);
+      shortDivOk = (rates[0].high >= priorHigh) && (rsiV < priorRsiHigh);
+     }
+
+   bool longOk  = (stretch <= -InpStretchAtr) && (rsiV <= InpRsiOversold)
+                  && (close > open) && longBarOk && longHtfOk && longDivOk;
+   bool shortOk = (stretch >=  InpStretchAtr) && (rsiV >= InpRsiOverbought)
+                  && (close < open) && shortBarOk && shortHtfOk && shortDivOk;
 
    if(longOk == shortOk)
      {
