@@ -17,6 +17,7 @@ import yaml
 from .backtest.broker import SimBroker, SpreadModel
 from .contract import Contract
 from .risk import RiskConfig, SessionWindow
+from .strategy.breakout_momentum import BreakoutMomentum, BreakoutMomentumParams
 from .strategy.mean_reversion_scalper import (
     MeanReversionScalper,
     MeanReversionScalperParams,
@@ -26,6 +27,7 @@ from .strategy.trend_pullback import TrendPullback, TrendPullbackParams
 STRATEGIES = {
     "trend_pullback": (TrendPullback, TrendPullbackParams),
     "mean_reversion_scalper": (MeanReversionScalper, MeanReversionScalperParams),
+    "breakout_momentum": (BreakoutMomentum, BreakoutMomentumParams),
 }
 
 
