@@ -23,11 +23,16 @@ from .strategy.mean_reversion_scalper import (
     MeanReversionScalperParams,
 )
 from .strategy.trend_pullback import TrendPullback, TrendPullbackParams
+from .strategy.volume_profile_wyckoff import (
+    VolumeProfileWyckoff,
+    VolumeProfileWyckoffParams,
+)
 
 STRATEGIES = {
     "trend_pullback": (TrendPullback, TrendPullbackParams),
     "mean_reversion_scalper": (MeanReversionScalper, MeanReversionScalperParams),
     "breakout_momentum": (BreakoutMomentum, BreakoutMomentumParams),
+    "volume_profile_wyckoff": (VolumeProfileWyckoff, VolumeProfileWyckoffParams),
 }
 
 
