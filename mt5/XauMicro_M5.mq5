@@ -14,7 +14,7 @@
 //|
 //|     at 2% risk the budget is 2.00, so stops must be <= 2.00
 //|     XauTrend's stops (median 3.26) fit  9% of its signals
-//|     XauPulse's      (median 1.98) fit 52%
+//|     Anas's          (median 1.98) fit 52%
 //|     XauBreak's      (median 1.12) fit 92%   <- this one
 //|
 //| THE 2% IS NOT A RECOMMENDATION, IT IS THE FLOOR THAT WORKS

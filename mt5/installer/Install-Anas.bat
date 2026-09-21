@@ -1,32 +1,32 @@
 @echo off
 chcp 65001 >nul 2>&1
 setlocal enabledelayedexpansion
-title XauPulse M5 - Installer
+title Anas M5 - Installer
 color 0F
 
-set "SRC=%~dp0XauPulse_M5.mq5"
+set "SRC=%~dp0Anas_M5.mq5"
 set "BASE=%APPDATA%\MetaQuotes\Terminal"
 set /a FOUND=0
 set /a COMPILED=0
 
 echo.
 echo ================================================================
-echo   XauPulse M5  -  MetaTrader 5 Installer
+echo   Anas M5  -  MetaTrader 5 Installer
 echo   منصّب بوت الذهب لميتاتريدر 5
 echo ================================================================
 echo.
 
 rem ---------------------------------------------------------------- source
 if not exist "%SRC%" (
-  echo   [ERROR] XauPulse_M5.mq5 غير موجود بنفس مجلد هذا الملف
-  echo   [ERROR] XauPulse_M5.mq5 not found next to this installer
+  echo   [ERROR] Anas_M5.mq5 غير موجود بنفس مجلد هذا الملف
+  echo   [ERROR] Anas_M5.mq5 not found next to this installer
   echo.
   echo   فك ضغط الملف المضغوط بالكامل ثم شغّل هذا الملف من داخله.
   goto :END
 )
 
 for %%F in ("%SRC%") do set "SRCSIZE=%%~zF"
-echo   المصدر / Source : XauPulse_M5.mq5  ^(!SRCSIZE! bytes^)
+echo   المصدر / Source : Anas_M5.mq5  ^(!SRCSIZE! bytes^)
 if not "!SRCSIZE!"=="40616" (
   echo   [!] تحذير: الحجم المتوقع 40616 بايت. الملف قد يكون ناقصاً.
 )
@@ -57,7 +57,7 @@ for /d %%T in ("%BASE%\*") do (
     rem --- remove every earlier attempt, in all three program folders ---
     for %%D in (Experts Scripts Indicators) do (
       if exist "%%~fT\MQL5\%%D" (
-        for %%N in (XauPulse_M5 GoldBot_M5 GoldBot aaa) do (
+        for %%N in (Anas_M5 GoldBot_M5 GoldBot aaa) do (
           if exist "%%~fT\MQL5\%%D\%%N.mq5" (
             del /f /q "%%~fT\MQL5\%%D\%%N.mq5" >nul 2>&1
             echo       حذفت القديم / removed : MQL5\%%D\%%N.mq5
@@ -71,9 +71,9 @@ for /d %%T in ("%BASE%\*") do (
     )
 
     rem --- copy the fresh source in ---
-    copy /y "%SRC%" "!EXPERTS!\XauPulse_M5.mq5" >nul 2>&1
-    if exist "!EXPERTS!\XauPulse_M5.mq5" (
-      for %%F in ("!EXPERTS!\XauPulse_M5.mq5") do set "GOTSIZE=%%~zF"
+    copy /y "%SRC%" "!EXPERTS!\Anas_M5.mq5" >nul 2>&1
+    if exist "!EXPERTS!\Anas_M5.mq5" (
+      for %%F in ("!EXPERTS!\Anas_M5.mq5") do set "GOTSIZE=%%~zF"
       echo       [OK] نُسخ إلى MQL5\Experts  ^(!GOTSIZE! bytes^)
     ) else (
       echo       [ERROR] فشل النسخ. جرّب تشغيل هذا الملف كمسؤول ^(Run as administrator^).
@@ -91,13 +91,13 @@ for /d %%T in ("%BASE%\*") do (
     if not defined MEPATH call :FINDEDITOR
     if defined MEPATH (
       echo       أترجم / compiling ...
-      "!MEPATH!" /compile:"!EXPERTS!\XauPulse_M5.mq5" /log:"!EXPERTS!\XauPulse_M5_compile.log" >nul 2>&1
-      if exist "!EXPERTS!\XauPulse_M5.ex5" (
+      "!MEPATH!" /compile:"!EXPERTS!\Anas_M5.mq5" /log:"!EXPERTS!\Anas_M5_compile.log" >nul 2>&1
+      if exist "!EXPERTS!\Anas_M5.ex5" (
         set /a COMPILED+=1
-        echo       [OK] تمت الترجمة بنجاح - XauPulse_M5.ex5 جاهز
+        echo       [OK] تمت الترجمة بنجاح - Anas_M5.ex5 جاهز
       ) else (
         echo       [!] الترجمة لم تنتج ملف ex5. افتح MetaEditor واضغط F7.
-        if exist "!EXPERTS!\XauPulse_M5_compile.log" echo           السجل: MQL5\Experts\XauPulse_M5_compile.log
+        if exist "!EXPERTS!\Anas_M5_compile.log" echo           السجل: MQL5\Experts\Anas_M5_compile.log
       )
     ) else (
       echo       [!] لم أجد MetaEditor. افتح ميتاتريدر واضغط F4 ثم F7.
@@ -124,14 +124,14 @@ if %COMPILED% GTR 0 (
   echo    خلص! الآن بميتاتريدر:
   echo      1^) اضغط Ctrl+N لفتح نافذة Navigator
   echo      2^) كليك يمين على Expert Advisors ثم Refresh
-  echo      3^) راح يظهر XauPulse_M5 - اسحبه على شارت XAUUSD إطار M5
+  echo      3^) راح يظهر Anas_M5 - اسحبه على شارت XAUUSD إطار M5
   echo      4^) فعّل زر AutoTrading بالشريط العلوي
   echo   ================================================================
 ) else (
   echo   ================================================================
   echo    الملف انتقل لمكانه الصحيح، بقيت خطوة الترجمة:
   echo      1^) بميتاتريدر اضغط F4  ^(يفتح MetaEditor^)
-  echo      2^) بنافذة Navigator اليسرى: Experts ثم دبل-كليك XauPulse_M5
+  echo      2^) بنافذة Navigator اليسرى: Experts ثم دبل-كليك Anas_M5
   echo      3^) اضغط F7   ^(لازم تطلع 0 errors, 0 warnings^)
   echo   ================================================================
 )

@@ -1,7 +1,7 @@
 # ---------------------------------------------------------------------------
-# XauPulse — mean-reversion scalper for XAUUSD M5.
+# Anas — mean-reversion scalper for XAUUSD M5.
 #
-# Mirrors mt5/XauPulse_M5.mq5. Replace the cost figures with numbers from YOUR
+# Mirrors mt5/Anas_M5.mq5. Replace the cost figures with numbers from YOUR
 # broker: a scalper pays the spread on every one of many trades, so these
 # decide the result far more than any strategy parameter does.
 # ---------------------------------------------------------------------------

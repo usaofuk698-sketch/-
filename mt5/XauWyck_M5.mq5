@@ -82,7 +82,7 @@ input bool   InpTradeFriday        = true;
 input group "=== Execution ==="
 input long   InpMagicNumber        = 770622; // Identifies this EA's own trades.
                                              // MUST differ from XauTrend (770577) and
-                                             // XauPulse (770588): each EA manages only
+                                             // Anas (770588): each EA manages only
                                              // positions with its own magic, so a shared
                                              // number would have each bot closing the
                                              // others' trades.

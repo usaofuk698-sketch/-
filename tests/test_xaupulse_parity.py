@@ -1,4 +1,4 @@
-"""Parity between the Python scalper and the XauPulse_M5 Expert Advisor.
+"""Parity between the Python scalper and the Anas_M5 Expert Advisor.
 
 Same purpose as ``test_mql5_parity``: nothing here compiles MQL5, so a porting
 slip would stay invisible until it cost money. Defaults are parsed from the
@@ -19,7 +19,7 @@ from goldbot.strategy.mean_reversion_scalper import (
     MeanReversionScalperParams,
 )
 
-MQ5 = Path(__file__).resolve().parents[1] / "mt5" / "XauPulse_M5.mq5"
+MQ5 = Path(__file__).resolve().parents[1] / "mt5" / "Anas_M5.mq5"
 
 PARAM_MAP = {
     "InpEmaPeriod": "ema_period",
@@ -108,7 +108,7 @@ def test_ea_reads_only_closed_bars():
 
 
 def mql5_entry(i: int, feat, p: MeanReversionScalperParams):
-    """Mirror of TryEntry() in XauPulse_M5.mq5."""
+    """Mirror of TryEntry() in Anas_M5.mq5."""
     a = {c: feat[c].to_numpy(float) for c in
          ("open", "high", "low", "close", "ema", "atr", "adx", "rsi", "atr_med",
           "swing_low", "swing_high", "htf_slope", "close_pos",

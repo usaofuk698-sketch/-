@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//|                                                 XauPulse_M5.mq5  |
+//|                                                 Anas_M5.mq5  |
 //|              Mean-reversion scalper for spot gold on M5          |
 //|                        XAUUSD - M5 - built for Exness MT5        |
 //+------------------------------------------------------------------+
@@ -32,7 +32,7 @@
 //| Nothing broker-specific is hardcoded -- contract size, tick value, lot step,
 //| stop distance and fill policy are read from the symbol at run time.
 //+------------------------------------------------------------------+
-#property copyright "XauPulse"
+#property copyright "Anas"
 #property link      ""
 #property version   "1.00"
 
@@ -196,7 +196,7 @@ int OnInit()
    g_gmtOffsetHrs = ResolveGmtOffset();
    ResetDailyState(true);
 
-   PrintFormat("XauPulse M5 started on %s | server GMT offset %+d h | "
+   PrintFormat("Anas M5 started on %s | server GMT offset %+d h | "
                "tick %.5f, tick value %.5f, lots %.2f-%.2f step %.2f | stops level %d pts",
                _Symbol, g_gmtOffsetHrs, g_tickSize, g_tickValue,
                g_volMin, g_volMax, g_volStep, g_stopsLevelPts);
@@ -851,8 +851,8 @@ void OpenTrade(ENUM_ORDER_TYPE type, double price, double sl, double tp, double 
    tp = NormalizeDouble(tp, _Digits);
 
    bool ok = (type == ORDER_TYPE_BUY)
-             ? trade.Buy(lots, _Symbol, 0.0, sl, tp, "XauPulse")
-             : trade.Sell(lots, _Symbol, 0.0, sl, tp, "XauPulse");
+             ? trade.Buy(lots, _Symbol, 0.0, sl, tp, "Anas")
+             : trade.Sell(lots, _Symbol, 0.0, sl, tp, "Anas");
 
    if(ok)
      {
@@ -965,7 +965,7 @@ void DrawPanel()
    datetime now   = TimeCurrent();
 
    string txt = StringFormat(
-      "XauPulse M5  |  %s\n"
+      "Anas M5  |  %s\n"
       "-----------------------------------------\n"
       "server %s   (GMT%+d)   GMT hour %02d\n"
       "session %02d-%02d GMT      in session: %s\n"
