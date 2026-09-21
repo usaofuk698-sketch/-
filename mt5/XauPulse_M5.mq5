@@ -64,8 +64,8 @@ input double InpFixedLots          = 0.0;    // >0 overrides risk sizing (NOT re
 input group "=== Session (hours are GMT/UTC, not server time) ==="
 input ENUM_TZ_MODE InpTzMode       = TZ_AUTO; // How to resolve server time -> GMT
 input int    InpServerGmtOffset    = 0;      // Server GMT offset when TZ_MANUAL
-input int    InpSessionStartHour   = 0;      // Session opens (GMT). 0 + 24 = no session filter
-input int    InpSessionEndHour     = 24;     // Session closes (GMT)
+input int    InpSessionStartHour   = 12;     // Session opens (GMT). 0 + 24 = no session filter
+input int    InpSessionEndHour     = 16;     // Session closes (GMT). 12-16 GMT = London/NY overlap
 input int    InpNoNewTradesAfter   = 24;     // No new entries from this GMT hour (24 = off)
 input int    InpFlatByHour         = 24;     // Force flat at this GMT hour (24 = never)
 input bool   InpTradeMonday        = true;

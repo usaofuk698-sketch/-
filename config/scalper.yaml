@@ -45,8 +45,8 @@ risk:
   min_target_spread_ratio: 5.0 # the binding constraint; see the strategy docstring
   trading_days: [0, 1, 2, 3, 4]
   sessions:
-    - start_hour: 0
-      end_hour: 24
+    - start_hour: 12               # 12:00-16:00 GMT = London/NY overlap = 15:00-19:00 Baghdad
+      end_hour: 16
   no_new_trades_after_hour: 24
   flat_by_hour: 24
 
