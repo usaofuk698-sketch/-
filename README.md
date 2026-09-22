@@ -202,6 +202,32 @@ realised stop distance. Break-even at 1R, ATR trail from 1.5R.
 **This is a starting point, not a finished edge.** Every filter is a named
 parameter that walk-forward is free to find worthless.
 
+## XauFlash — seconds scalper (`mt5/XauFlash_S.mq5`)
+
+بوت سكالب يفتح ويسكّر الصفقة خلال ثواني. يراقب كل تِك، وإذا الذهب تحرّك
+حركة قوية باتجاه واحد خلال آخر 3 ثواني يدخل وياه، ويطلع عند الهدف أو
+الوقف أو بعد 15 ثانية كحد أقصى — أيهم يصير أول.
+
+| | |
+|---|---|
+| Entry | bid moves ≥ 0.60 in the last 3000 ms, on ≥ 6 ticks, ≥ 70% of steps one way, and ≥ 3× the live spread |
+| Exit | TP 0.80 / SL 0.80 **sent to the server with the order**, or market close after `MaxHoldSeconds` (15 s) |
+| Timer | a 200 ms timer enforces the hold limit even when no ticks arrive |
+| Guards | 0.5% risk per trade, 3% daily loss, 5-loss streak, 40 trades/day, 20 s cooldown, 35-point spread cap, 07–20 GMT |
+| Install | `mt5/installer/Install-XauFlash.bat`, attach to any XAUUSD chart (the timeframe does not matter) |
+
+Honest caveats, also printed in the file header:
+
+- **There is no backtest of this one in `goldbot/`.** The Python engine works
+  on M5 bars and cannot see a 3-second burst. The only valid test is the MT5
+  Strategy Tester with **"Every tick based on real ticks"**, then a demo.
+- **Spread and slippage are most of the game.** A 0.25 spread is 31% of a 0.80
+  target. The panel shows average slippage per fill — if it is eating the
+  edge on demo, it will on live.
+- **Latency matters.** Run it on a VPS close to the broker's server.
+- **Broker rules.** Some brokers and most prop firms restrict trades held
+  under a minimum time. Check before running it.
+
 ## Risk controls
 
 Sizing is always derived from stop distance, never a fixed lot count — a fixed
