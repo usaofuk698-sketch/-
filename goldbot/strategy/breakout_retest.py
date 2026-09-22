@@ -34,6 +34,25 @@ nothing left here to trade. If the clock runs out first, the level is
 considered stale: a level nobody has come back to test in that time is not one
 the market is still trading against.
 
+Quality scales the size of the ONE trade, never the count of trades
+---------------------------------------------------------------------
+A setup that clears every filter by a wide margin is not the same as one that
+barely scrapes past them, and it is tempting to reward the strong one with an
+extra position. That temptation is refused on purpose: this engine enforces
+one position at a time across every strategy in the repository, and stacking
+a second, separately-sized position on the same signal is not something this
+backtester can honestly price or this validation suite can honestly test --
+"probably fine" is not good enough for money. What the same conviction CAN
+buy, safely and inside the existing one-trade rule, is a larger size on that
+one trade and a farther target: :attr:`quality_max_risk_mult` scales the risk
+fraction (via ``Signal.meta["risk_multiplier"]``, read by
+:meth:`goldbot.risk.RiskManager.size`) and the reward-to-risk floor scales
+between :attr:`quality_min_reward_risk` and :attr:`quality_max_reward_risk`.
+Both are driven by a single 0-1 quality score built from four independent,
+already-computed signals -- breakout decisiveness, trend strength, retest
+precision, and rejection strength -- averaged so no one of them can push the
+score near 1.0 by itself.
+
 Why this needs a loop, not a rolling window
 --------------------------------------------
 Every other strategy in this package computes its features with vectorised
@@ -79,8 +98,18 @@ class BreakoutRetestParams(StrategyParams):
     # -- stop and target
     stop_atr_buffer: float = 0.20     # beyond the retest bar's own extreme
     min_stop_atr_mult: float = 1.00
-    reward_risk: float = 2.00
+    reward_risk: float = 2.00         # floor: the worst a passing signal ever gets
     min_target_spread_ratio: float = 6.0
+    # -- quality score (0-1): how much better than bare-minimum this setup is,
+    # averaged from four independent signals so no single one can push the
+    # score near 1.0 alone. Scales the target and the size below -- never the
+    # entry decision itself, which is still a strict pass/fail on the filters
+    # above. See the class docstring for why this is a size lever, not an
+    # extra trade.
+    quality_min_reward_risk: float = 1.50   # reward:risk at quality score 0
+    quality_max_reward_risk: float = 3.00   # reward:risk at quality score 1
+    use_measured_move_target: bool = True   # project the broken range's own height
+    quality_max_risk_mult: float = 1.50     # position-size multiplier at quality score 1
     # -- management
     breakeven_at_r: float | None = 1.0
     breakeven_offset_atr: float = 0.05
@@ -93,6 +122,7 @@ class BreakoutRetest(Strategy):
     _FEATURE_COLS = (
         "open", "high", "low", "close", "atr", "adx", "atr_med",
         "close_pos", "bar_range", "retest_level", "retest_side",
+        "retest_strength", "retest_width",
     )
 
     def __init__(self, params: BreakoutRetestParams | None = None):
@@ -142,16 +172,22 @@ class BreakoutRetest(Strategy):
         n = len(out)
         level = np.full(n, np.nan)
         side = np.zeros(n, dtype=float)
+        strength = np.full(n, np.nan)   # breakout decisiveness, frozen at breakout time
+        width = np.full(n, np.nan)      # the broken range's own height, for the measured move
 
         pending_level = float("nan")
         pending_side = 0
         pending_age = 0
+        pending_strength = float("nan")
+        pending_width = float("nan")
 
         for i in range(n):
             # State as carried INTO this bar -- what entry() at i is allowed to
             # see. Recorded before anything below reacts to bar i itself.
             level[i] = pending_level
             side[i] = float(pending_side)
+            strength[i] = pending_strength
+            width[i] = pending_width
 
             if pending_side != 0:
                 pending_age += 1
@@ -165,6 +201,8 @@ class BreakoutRetest(Strategy):
                 if pending_age > p.retest_max_bars or closed_through:
                     pending_side = 0
                     pending_level = float("nan")
+                    pending_strength = float("nan")
+                    pending_width = float("nan")
 
             a_v = atr_a[i]
             rh, rl = rh_a[i], rl_a[i]
@@ -173,16 +211,55 @@ class BreakoutRetest(Strategy):
                 margin = p.break_margin_atr * a_v
                 broke_up = decisive and close_a[i] > rh + margin and close_pos_a[i] >= 0.5
                 broke_down = decisive and close_a[i] < rl - margin and (1.0 - close_pos_a[i]) >= 0.5
+                # How far the breakout bar's own range exceeded the bare
+                # minimum required to call it decisive, as a 0-1 fraction.
+                bar_strength = min(
+                    max((bar_range_a[i] / a_v - p.min_bar_range_atr) / p.min_bar_range_atr, 0.0),
+                    1.0,
+                )
                 if broke_up and not broke_down:
                     pending_side, pending_level, pending_age = 1, rh, 0
+                    pending_strength, pending_width = bar_strength, rh - rl
                 elif broke_down and not broke_up:
                     pending_side, pending_level, pending_age = -1, rl, 0
+                    pending_strength, pending_width = bar_strength, rh - rl
 
         out["retest_level"] = level
         out["retest_side"] = side
+        out["retest_strength"] = strength
+        out["retest_width"] = width
         self._a = {col: out[col].to_numpy(dtype=float) for col in self._FEATURE_COLS}
         self._n = n
         return out
+
+    @staticmethod
+    def _clamp01(x: float) -> float:
+        return 0.0 if x < 0.0 else (1.0 if x > 1.0 else x)
+
+    def _quality_score(
+        self, breakout_strength: float, adx_v: float, precision: float, rejection: float
+    ) -> float:
+        """Average four independent 0-1 signals so no single one dominates.
+
+        Each component answers a different question -- how decisive was the
+        original break, how much trend is behind the continuation, how close
+        (not just "close enough") was the retest, and how cleanly did the
+        retest bar reject the level. A setup can only score near 1.0 by being
+        genuinely strong on all four, not by maxing out one.
+        """
+        p = self.params
+        adx_component = (
+            self._clamp01((adx_v - p.adx_min) / p.adx_min)
+            if p.adx_min > 0.0 and np.isfinite(adx_v)
+            else 0.5  # filter is off: no gradient to read, so stay neutral
+        )
+        parts = [
+            self._clamp01(breakout_strength) if np.isfinite(breakout_strength) else 0.5,
+            adx_component,
+            self._clamp01(precision),
+            self._clamp01(rejection),
+        ]
+        return sum(parts) / len(parts)
 
     # ---------------------------------------------------------------- entry
     def entry(self, i: int, feat: pd.DataFrame) -> Signal | None:
@@ -197,6 +274,7 @@ class BreakoutRetest(Strategy):
         atr_v, med, adx_v = a["atr"][i], a["atr_med"][i], a["adx"][i]
         close, high_v, low_v = a["close"][i], a["high"][i], a["low"][i]
         close_pos = a["close_pos"][i]
+        breakout_strength, range_width = a["retest_strength"][i], a["retest_width"][i]
 
         if not (np.isfinite(atr_v) and np.isfinite(med)):
             return None
@@ -221,7 +299,18 @@ class BreakoutRetest(Strategy):
             sl = min(low_v - p.stop_atr_buffer * atr_v, close - p.min_stop_atr_mult * atr_v)
             if sl >= close:
                 return None
-            tp = close + p.reward_risk * (close - sl)
+            precision = 1.0 - abs(low_v - level) / tol if tol > 0 else 0.5
+            rejection = (
+                (close_pos - p.retest_close_position_min) / (1.0 - p.retest_close_position_min)
+                if p.retest_close_position_min < 1.0 else 1.0
+            )
+            quality = self._quality_score(breakout_strength, adx_v, precision, rejection)
+            rr = p.quality_min_reward_risk + quality * (p.quality_max_reward_risk - p.quality_min_reward_risk)
+            risk_dist = close - sl
+            tp_dist = rr * risk_dist
+            if p.use_measured_move_target and np.isfinite(range_width) and range_width > 0:
+                tp_dist = max(tp_dist, range_width)
+            tp = close + tp_dist
             side = Side.LONG
         else:
             # Former support, now expected to hold as resistance.
@@ -235,8 +324,21 @@ class BreakoutRetest(Strategy):
             sl = max(high_v + p.stop_atr_buffer * atr_v, close + p.min_stop_atr_mult * atr_v)
             if sl <= close:
                 return None
-            tp = close - p.reward_risk * (sl - close)
+            precision = 1.0 - abs(high_v - level) / tol if tol > 0 else 0.5
+            rejection = (
+                ((1.0 - close_pos) - p.retest_close_position_min) / (1.0 - p.retest_close_position_min)
+                if p.retest_close_position_min < 1.0 else 1.0
+            )
+            quality = self._quality_score(breakout_strength, adx_v, precision, rejection)
+            rr = p.quality_min_reward_risk + quality * (p.quality_max_reward_risk - p.quality_min_reward_risk)
+            risk_dist = sl - close
+            tp_dist = rr * risk_dist
+            if p.use_measured_move_target and np.isfinite(range_width) and range_width > 0:
+                tp_dist = max(tp_dist, range_width)
+            tp = close - tp_dist
             side = Side.SHORT
+
+        risk_mult = 1.0 + quality * (p.quality_max_risk_mult - 1.0)
 
         return Signal(
             side=side,
@@ -247,6 +349,8 @@ class BreakoutRetest(Strategy):
                 "atr": float(atr_v),
                 "level": float(level),
                 "target_distance": float(abs(tp - close)),
+                "quality": float(quality),
+                "risk_multiplier": float(risk_mult),
             },
         )
 

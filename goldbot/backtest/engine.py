@@ -238,7 +238,8 @@ class BacktestEngine:
             if sig.side is Side.SHORT and sig.take_profit >= fill:
                 return None, "gapped_past_target"
 
-        lots, why = self.risk.size(equity, fill, sig.stop_loss)
+        risk_mult = float(sig.meta.get("risk_multiplier", 1.0)) if sig.meta else 1.0
+        lots, why = self.risk.size(equity, fill, sig.stop_loss, risk_multiplier=risk_mult)
         if lots <= 0:
             return None, why or "zero_size"
 

@@ -39,6 +39,19 @@
 //| InpRetestMaxBars is a modest window (bars, not days), the practical cost is
 //| a handful of missed setups around a restart, not a wrong one taken.
 //|
+//| QUALITY SCORE, SIZE, NEVER A SECOND TRADE
+//| A setup that clears every filter with room to spare is not the same as one
+//| that barely qualifies, and a 0-1 quality score (breakout decisiveness +
+//| ADX strength + retest precision + rejection strength, averaged so no one
+//| of them can carry it alone) says how much better. That score scales the
+//| reward:risk floor between InpQualityMinRR and InpQualityMaxRR, optionally
+//| extends the target to a measured-move projection of the broken range's own
+//| height, and scales CalcLots()'s risk fraction up to InpQualityMaxRiskMult.
+//| It never opens a second position: this EA enforces one position at a time
+//| by design (HasOpenPosition() below), the same rule as every other EA here,
+//| and a signal this confident earns a bigger, farther-reaching version of
+//| the ONE trade it is allowed to take -- not an unvalidated second one.
+//|
 //| Same invariants as the other EAs: closed bars only (bar 0 is still forming
 //| and is never read), and stops are only ever tightened. Nothing
 //| broker-specific is hardcoded.
@@ -75,8 +88,15 @@ input double InpFixedLots          = 0.0;    // >0 overrides risk sizing (NOT re
 input group "=== Session (hours are GMT/UTC, not server time) ==="
 input ENUM_TZ_MODE InpTzMode       = TZ_AUTO; // How to resolve server time -> GMT
 input int    InpServerGmtOffset    = 0;      // Server GMT offset when TZ_MANUAL
-input int    InpSessionStartHour   = 12;     // Session opens (GMT). Default = London/NY overlap
-input int    InpSessionEndHour     = 16;     // Session closes (GMT)
+// Three separate windows, not one continuous block -- the quiet stretch of
+// late-Asian/late-London hours between them is deliberately excluded, not a
+// fourth window someone forgot. Set a window's Start == End to disable it.
+input int    InpSession1Start      = 22;     // Window 1: day open + early Asian (wraps midnight)
+input int    InpSession1End        = 2;
+input int    InpSession2Start      = 8;      // Window 2: London open
+input int    InpSession2End        = 10;
+input int    InpSession3Start      = 12;     // Window 3: London/NY overlap
+input int    InpSession3End        = 16;
 input int    InpNoNewTradesAfter   = 24;     // No new entries from this GMT hour (24 = off)
 input int    InpFlatByHour         = 24;     // Force flat at this GMT hour (24 = never)
 input bool   InpTradeMonday        = true;
@@ -118,8 +138,13 @@ input double InpRetestClosePosMin  = 0.55;   // The retest bar must reject the l
 input group "=== Strategy: stop and target ==="
 input double InpStopAtrBuffer      = 0.20;   // Beyond the retest bar's own extreme
 input double InpMinStopAtrMult     = 1.00;   // Floor on stop distance (xATR)
-input double InpRewardRisk         = 2.00;   // Target as a multiple of the stop
 input double InpMinTargetSpreadRatio = 6.0;  // Target must be >= N x the live spread
+
+input group "=== Strategy: quality score (scales size and target, never the entry decision) ==="
+input double InpQualityMinRR       = 1.50;   // Reward:risk at quality score 0 (a signal that barely passed)
+input double InpQualityMaxRR       = 3.00;   // Reward:risk at quality score 1 (as strong as this gets)
+input bool   InpUseMeasuredMove    = true;   // Also let the target reach the broken range's own height
+input double InpQualityMaxRiskMult = 1.50;   // Position-size multiplier at quality score 1. NEVER a 2nd trade -- see file header.
 
 input group "=== Strategy: in-trade management ==="
 input bool   InpUseBreakeven       = true;
@@ -148,12 +173,16 @@ bool     g_halted        = false;
 string   g_haltReason    = "";
 
 // --- pending-breakout state, advanced once per closed bar (see file header)
-double   g_pendingLevel  = 0.0;
-int      g_pendingSide   = 0;      // 0 none, 1 bullish (support test), -1 bearish (resistance test)
-int      g_pendingAge    = 0;
+double   g_pendingLevel    = 0.0;
+int      g_pendingSide     = 0;      // 0 none, 1 bullish (support test), -1 bearish (resistance test)
+int      g_pendingAge      = 0;
+double   g_pendingStrength = 0.0;    // breakout decisiveness (0-1), frozen at breakout time
+double   g_pendingWidth    = 0.0;    // the broken range's own height, for the measured move
 // --- snapshot taken before each bar's own advance; TryEntry() reads THIS
-double   g_retestLevel   = 0.0;
-int      g_retestSide    = 0;
+double   g_retestLevel     = 0.0;
+int      g_retestSide      = 0;
+double   g_retestStrength  = 0.0;
+double   g_retestWidth     = 0.0;
 
 // --- symbol spec, resolved once in OnInit
 double   g_maxSpreadPrice = 0.0;  // InpMaxSpreadPoints converted to price units
@@ -205,13 +234,9 @@ int OnInit()
                "tick %.5f, tick value %.5f, lots %.2f-%.2f step %.2f | stops level %d pts",
                _Symbol, g_gmtOffsetHrs, g_tickSize, g_tickValue,
                g_volMin, g_volMax, g_volStep, g_stopsLevelPts);
-   if(InpSessionStartHour <= 0 && InpSessionEndHour >= 24)
-      Print("Session filter: OFF - trading all hours on permitted weekdays.");
-   else
-      PrintFormat("Session %02d:00-%02d:00 GMT  =  %02d:00-%02d:00 server time",
-                  InpSessionStartHour, InpSessionEndHour,
-                  (InpSessionStartHour + g_gmtOffsetHrs + 24) % 24,
-                  (InpSessionEndHour   + g_gmtOffsetHrs + 24) % 24);
+   PrintSessionWindow("Window 1 (day open/Asian)", InpSession1Start, InpSession1End);
+   PrintSessionWindow("Window 2 (London open)",    InpSession2Start, InpSession2End);
+   PrintSessionWindow("Window 3 (London/NY)",       InpSession3Start, InpSession3End);
 
    // The spread limit is entered in POINTS because that is the unit MetaTrader
    // displays in Market Watch. What it means in money depends entirely on the
@@ -288,7 +313,10 @@ bool ValidateInputs()
       Print("ERROR: RiskPercent must be in (0, 5]. Above ~2% a normal losing run wipes the account.");
       return(false);
      }
-   if(InpRewardRisk <= 0.0)          { Print("ERROR: RewardRisk must be > 0"); return(false); }
+   if(InpQualityMinRR <= 0.0)        { Print("ERROR: QualityMinRR must be > 0"); return(false); }
+   if(InpQualityMaxRR < InpQualityMinRR)
+     { Print("ERROR: QualityMaxRR must be >= QualityMinRR"); return(false); }
+   if(InpQualityMaxRiskMult < 1.0)   { Print("ERROR: QualityMaxRiskMult must be >= 1.0"); return(false); }
    if(InpRangeLookback < 2)          { Print("ERROR: RangeLookback must be >= 2"); return(false); }
    if(InpRetestMaxBars < 1)          { Print("ERROR: RetestMaxBars must be >= 1"); return(false); }
    if(InpRetestClosePosMin < 0.0 || InpRetestClosePosMin > 1.0)
@@ -351,6 +379,19 @@ int GmtDayOfWeek(datetime serverTime)
    return(t.day_of_week); // 0 = Sunday
   }
 
+void PrintSessionWindow(string label, int start, int end)
+  {
+   if(start == end)
+     {
+      PrintFormat("%s: OFF (start == end)", label);
+      return;
+     }
+   PrintFormat("%s: %02d:00-%02d:00 GMT  =  %02d:00-%02d:00 server time",
+               label, start, end,
+               (start + g_gmtOffsetHrs + 24) % 24,
+               (end   + g_gmtOffsetHrs + 24) % 24);
+  }
+
 //+------------------------------------------------------------------+
 //| MAIN LOOP                                                        |
 //+------------------------------------------------------------------+
@@ -369,8 +410,10 @@ void OnTick()
 
    // Snapshot the pending-breakout state as it stood BEFORE this bar, for
    // TryEntry() below. Must happen before AdvancePendingBreakout() touches it.
-   g_retestLevel = g_pendingLevel;
-   g_retestSide  = g_pendingSide;
+   g_retestLevel    = g_pendingLevel;
+   g_retestSide     = g_pendingSide;
+   g_retestStrength = g_pendingStrength;
+   g_retestWidth    = g_pendingWidth;
 
    // Advance the pending-breakout state using the bar that just closed.
    // Unconditional -- runs whether or not a position is open, mirroring the
@@ -529,12 +572,22 @@ bool IsTradingDay(int dow)
    return(false); // weekend
   }
 
+//--- A window with Start == End is disabled, not "the whole day": treating
+//--- equal bounds as 24 hours (as a single legacy window used to for 0/24)
+//--- would make the obvious way to turn a window off do the opposite.
+bool WindowContainsHour(int h, int start, int end)
+  {
+   if(start == end) return(false);
+   if(start < end)  return(h >= start && h < end);
+   return(h >= start || h < end); // wraps midnight
+  }
+
 bool InSession(datetime serverTime)
   {
    int h = GmtHour(serverTime);
-   if(InpSessionStartHour <= InpSessionEndHour)
-      return(h >= InpSessionStartHour && h < InpSessionEndHour);
-   return(h >= InpSessionStartHour || h < InpSessionEndHour); // wraps midnight
+   return(WindowContainsHour(h, InpSession1Start, InpSession1End)
+       || WindowContainsHour(h, InpSession2Start, InpSession2End)
+       || WindowContainsHour(h, InpSession3Start, InpSession3End));
   }
 
 double CurrentSpread()
@@ -631,7 +684,7 @@ double MedianAtr(int lookback)
 //| is FLOORED to the lot step -- rounding up would risk more than    |
 //| authorised on every trade.                                        |
 //+------------------------------------------------------------------+
-double CalcLots(double entry, double stop)
+double CalcLots(double entry, double stop, double riskMult = 1.0)
   {
    if(InpFixedLots > 0.0)
       return(NormalizeLots(InpFixedLots));
@@ -640,7 +693,11 @@ double CalcLots(double entry, double stop)
    if(distance <= 0.0) return(0.0);
 
    double equity   = AccountInfoDouble(ACCOUNT_EQUITY);
-   double riskCash = equity * InpRiskPercent / 100.0;
+   // riskMult scales this ONE trade's size by its quality score (see the file
+   // header) -- it never opens a second position, so the daily-loss and
+   // trades-per-day limits below still bound the worst case exactly as they
+   // do for every other EA here.
+   double riskCash = equity * InpRiskPercent / 100.0 * MathMax(riskMult, 0.0);
 
    // Loss for one lot if the stop is hit, in account currency. Derived from the
    // symbol's own tick value, so it is correct on Standard, Cent and Raw
@@ -693,8 +750,10 @@ void AdvancePendingBreakout()
                          || (g_pendingSide == -1 && close > g_pendingLevel);
       if(g_pendingAge > InpRetestMaxBars || closedThrough)
         {
-         g_pendingSide  = 0;
-         g_pendingLevel = 0.0;
+         g_pendingSide     = 0;
+         g_pendingLevel    = 0.0;
+         g_pendingStrength = 0.0;
+         g_pendingWidth    = 0.0;
         }
      }
 
@@ -720,17 +779,25 @@ void AdvancePendingBreakout()
    bool brokeUp   = decisive && (close > rangeHigh + margin) && (closePos >= 0.5);
    bool brokeDown = decisive && (close < rangeLow  - margin) && ((1.0 - closePos) >= 0.5);
 
+   // How far the breakout bar's own range exceeded the bare minimum required
+   // to call it decisive, as a 0-1 fraction -- frozen for the eventual retest.
+   double barStrength = MathMin(MathMax((barRange / atrV - InpMinBarRangeAtr) / InpMinBarRangeAtr, 0.0), 1.0);
+
    if(brokeUp && !brokeDown)
      {
-      g_pendingSide  = 1;
-      g_pendingLevel = rangeHigh;
-      g_pendingAge   = 0;
+      g_pendingSide     = 1;
+      g_pendingLevel    = rangeHigh;
+      g_pendingAge      = 0;
+      g_pendingStrength = barStrength;
+      g_pendingWidth    = rangeHigh - rangeLow;
      }
    else if(brokeDown && !brokeUp)
      {
-      g_pendingSide  = -1;
-      g_pendingLevel = rangeLow;
-      g_pendingAge   = 0;
+      g_pendingSide     = -1;
+      g_pendingLevel    = rangeLow;
+      g_pendingAge      = 0;
+      g_pendingStrength = barStrength;
+      g_pendingWidth    = rangeHigh - rangeLow;
      }
   }
 
@@ -790,6 +857,8 @@ void TryEntry()
    double minOff    = MinStopOffset();
    double sl, tp, price;
 
+   double quality, riskMult;
+
    if(g_retestSide == 1)
      {
       //--- former resistance, now expected to hold as support
@@ -797,11 +866,21 @@ void TryEntry()
                       && (closePos >= InpRetestClosePosMin);
       if(!retestOk) { g_status = "no valid retest (support)"; return; }
 
+      double precision = (tol > 0.0) ? (1.0 - MathAbs(low_ - g_retestLevel) / tol) : 0.5;
+      double rejection = (InpRetestClosePosMin < 1.0)
+                          ? (closePos - InpRetestClosePosMin) / (1.0 - InpRetestClosePosMin)
+                          : 1.0;
+      quality = QualityScore(g_retestStrength, adxV, precision, rejection);
+
       price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
       sl    = MathMin(low_ - InpStopAtrBuffer * atrV, close - InpMinStopAtrMult * atrV);
       if(sl >= price - minOff) sl = price - MathMax(minOff, InpMinStopDistance);
-      tp    = price + InpRewardRisk * (price - sl);
-      OpenTrade(ORDER_TYPE_BUY, price, sl, tp, atrV);
+      double rr     = InpQualityMinRR + quality * (InpQualityMaxRR - InpQualityMinRR);
+      double tpDist = rr * (price - sl);
+      if(InpUseMeasuredMove && g_retestWidth > 0.0) tpDist = MathMax(tpDist, g_retestWidth);
+      tp       = price + tpDist;
+      riskMult = 1.0 + quality * (InpQualityMaxRiskMult - 1.0);
+      OpenTrade(ORDER_TYPE_BUY, price, sl, tp, atrV, riskMult, quality);
      }
    else
      {
@@ -810,16 +889,48 @@ void TryEntry()
                       && ((1.0 - closePos) >= InpRetestClosePosMin);
       if(!retestOk) { g_status = "no valid retest (resistance)"; return; }
 
+      double precision = (tol > 0.0) ? (1.0 - MathAbs(high_ - g_retestLevel) / tol) : 0.5;
+      double rejection = (InpRetestClosePosMin < 1.0)
+                          ? ((1.0 - closePos) - InpRetestClosePosMin) / (1.0 - InpRetestClosePosMin)
+                          : 1.0;
+      quality = QualityScore(g_retestStrength, adxV, precision, rejection);
+
       price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
       sl    = MathMax(high_ + InpStopAtrBuffer * atrV, close + InpMinStopAtrMult * atrV);
       if(sl <= price + minOff) sl = price + MathMax(minOff, InpMinStopDistance);
-      tp    = price - InpRewardRisk * (sl - price);
-      OpenTrade(ORDER_TYPE_SELL, price, sl, tp, atrV);
+      double rr     = InpQualityMinRR + quality * (InpQualityMaxRR - InpQualityMinRR);
+      double tpDist = rr * (sl - price);
+      if(InpUseMeasuredMove && g_retestWidth > 0.0) tpDist = MathMax(tpDist, g_retestWidth);
+      tp       = price - tpDist;
+      riskMult = 1.0 + quality * (InpQualityMaxRiskMult - 1.0);
+      OpenTrade(ORDER_TYPE_SELL, price, sl, tp, atrV, riskMult, quality);
      }
   }
 
 //+------------------------------------------------------------------+
-void OpenTrade(ENUM_ORDER_TYPE type, double price, double sl, double tp, double atrV)
+//| Quality score (0-1): breakout decisiveness + ADX strength + retest|
+//| precision + rejection strength, averaged so no one signal alone   |
+//| can push it near 1.0. See the file header for what this scales.   |
+//+------------------------------------------------------------------+
+double Clamp01(double x)
+  {
+   if(x < 0.0) return(0.0);
+   if(x > 1.0) return(1.0);
+   return(x);
+  }
+
+double QualityScore(double breakoutStrength, double adxV, double precision, double rejection)
+  {
+   double adxComponent = (InpAdxMin > 0.0 && MathIsValidNumber(adxV))
+                          ? Clamp01((adxV - InpAdxMin) / InpAdxMin)
+                          : 0.5;  // filter is off: no gradient to read, stay neutral
+   double bs = MathIsValidNumber(breakoutStrength) ? Clamp01(breakoutStrength) : 0.5;
+   return((bs + adxComponent + Clamp01(precision) + Clamp01(rejection)) / 4.0);
+  }
+
+//+------------------------------------------------------------------+
+void OpenTrade(ENUM_ORDER_TYPE type, double price, double sl, double tp, double atrV,
+                double riskMult, double quality)
   {
    double distance = MathAbs(price - sl);
 
@@ -847,7 +958,7 @@ void OpenTrade(ENUM_ORDER_TYPE type, double price, double sl, double tp, double 
       return;
      }
 
-   double lots = CalcLots(price, sl);
+   double lots = CalcLots(price, sl, riskMult);
    if(lots <= 0.0)
      {
       g_status = "size below broker minimum - equity too small for this risk %";
@@ -863,10 +974,10 @@ void OpenTrade(ENUM_ORDER_TYPE type, double price, double sl, double tp, double 
 
    if(ok)
      {
-      g_status = StringFormat("opened %s %.2f lots", (type==ORDER_TYPE_BUY ? "BUY":"SELL"), lots);
-      PrintFormat("%s %.2f lots @ ~%.2f  sl=%.2f tp=%.2f  risk=%.2f%%  ATR=%.2f  spread=%.2f",
+      g_status = StringFormat("opened %s %.2f lots (quality %.2f)", (type==ORDER_TYPE_BUY ? "BUY":"SELL"), lots, quality);
+      PrintFormat("%s %.2f lots @ ~%.2f  sl=%.2f tp=%.2f  risk=%.2f%% x%.2f  quality=%.2f  ATR=%.2f  spread=%.2f",
                   (type==ORDER_TYPE_BUY ? "BUY":"SELL"), lots, price, sl, tp,
-                  InpRiskPercent, atrV, CurrentSpread());
+                  InpRiskPercent, riskMult, quality, atrV, CurrentSpread());
      }
    else
      {
@@ -970,15 +1081,16 @@ void DrawPanel()
    datetime now   = TimeCurrent();
 
    string pendingTxt = (g_pendingSide == 0) ? "none"
-                      : StringFormat("%s @ %.2f (age %d/%d)",
+                      : StringFormat("%s @ %.2f (age %d/%d, strength %.2f)",
                                      (g_pendingSide == 1 ? "support-test" : "resistance-test"),
-                                     g_pendingLevel, g_pendingAge, InpRetestMaxBars);
+                                     g_pendingLevel, g_pendingAge, InpRetestMaxBars, g_pendingStrength);
 
+   int h = GmtHour(now);
    string txt = StringFormat(
       "XauRetest M5  |  %s\n"
       "-----------------------------------------\n"
       "server %s   (GMT%+d)   GMT hour %02d\n"
-      "session %02d-%02d GMT      in session: %s\n"
+      "windows  1:%02d-%02d  2:%02d-%02d  3:%02d-%02d GMT      in session: %s\n"
       "spread %.2f  (max %.2f = %d pts)\n"
       "pending breakout   %s\n"
       "-----------------------------------------\n"
@@ -988,8 +1100,9 @@ void DrawPanel()
       "position    %s\n"
       "state       %s%s",
       _Symbol,
-      TimeToString(now, TIME_DATE|TIME_MINUTES), g_gmtOffsetHrs, GmtHour(now),
-      InpSessionStartHour, InpSessionEndHour, (InSession(now) ? "yes" : "no"),
+      TimeToString(now, TIME_DATE|TIME_MINUTES), g_gmtOffsetHrs, h,
+      InpSession1Start, InpSession1End, InpSession2Start, InpSession2End,
+      InpSession3Start, InpSession3End, (InSession(now) ? "yes" : "no"),
       CurrentSpread(), g_maxSpreadPrice, InpMaxSpreadPoints,
       pendingTxt,
       equity,

@@ -145,8 +145,16 @@ class RiskManager:
         return False
 
     # ----------------------------------------------------------------- sizing
-    def size(self, equity: float, entry: float, stop: float) -> tuple[float, str]:
+    def size(
+        self, equity: float, entry: float, stop: float, risk_multiplier: float = 1.0
+    ) -> tuple[float, str]:
         """Lots such that a stop-out costs ``risk_per_trade_pct`` of equity.
+
+        ``risk_multiplier`` lets a strategy scale the risked fraction up or
+        down for a specific signal (e.g. a higher-conviction setup), via
+        ``Signal.meta["risk_multiplier"]``. It defaults to 1.0, so a strategy
+        that never sets it sizes exactly as before -- this is an opt-in, not a
+        behaviour change for the other three strategies in this repository.
 
         Returns ``(lots, rejection_reason)``; ``lots == 0.0`` means no trade.
         """
@@ -159,7 +167,7 @@ class RiskManager:
         base = equity if self.cfg.compounding else self.initial_capital
         if base <= 0:
             return 0.0, "no_equity"
-        risk_usd = base * (self.cfg.risk_per_trade_pct / 100.0)
+        risk_usd = base * (self.cfg.risk_per_trade_pct / 100.0) * max(risk_multiplier, 0.0)
 
         # Commission is a round-turn cost on the same position, so it competes
         # with the stop for the same risk budget.

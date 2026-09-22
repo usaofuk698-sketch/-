@@ -45,7 +45,15 @@ risk:
   min_target_spread_ratio: 6.0
   trading_days: [0, 1, 2, 3, 4]
   sessions:
-    - start_hour: 12            # 12:00-16:00 GMT = London/NY overlap = 15:00-19:00 Baghdad
+    # Three windows instead of one continuous block: day-open/early Asian
+    # (wraps midnight), London open, and the London/NY overlap. Between them
+    # is deliberately excluded -- that is the quiet stretch of the Asian and
+    # late-London hours, not a fourth window that was forgotten.
+    - start_hour: 22            # day open + early Asian = 01:00-05:00 Baghdad
+      end_hour: 2
+    - start_hour: 8             # London open = 11:00-13:00 Baghdad
+      end_hour: 10
+    - start_hour: 12            # London/NY overlap = 15:00-19:00 Baghdad
       end_hour: 16
   no_new_trades_after_hour: 24
   flat_by_hour: 24
@@ -69,6 +77,10 @@ strategy:
     min_stop_atr_mult: 1.00
     reward_risk: 2.00
     min_target_spread_ratio: 6.0
+    quality_min_reward_risk: 1.50
+    quality_max_reward_risk: 3.00
+    use_measured_move_target: true
+    quality_max_risk_mult: 1.50
     breakeven_at_r: 1.0
     breakeven_offset_atr: 0.05
     trail_at_r: null

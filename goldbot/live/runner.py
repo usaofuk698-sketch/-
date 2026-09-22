@@ -216,7 +216,8 @@ class LiveRunner:
             return True
 
         ref_price = float(feat["close"].iloc[i])
-        lots, reject = self.risk.size(equity, ref_price, signal.stop_loss)
+        risk_mult = float(signal.meta.get("risk_multiplier", 1.0)) if signal.meta else 1.0
+        lots, reject = self.risk.size(equity, ref_price, signal.stop_loss, risk_multiplier=risk_mult)
         if lots <= 0:
             log.info("signal rejected by sizing: %s", reject)
             return True
