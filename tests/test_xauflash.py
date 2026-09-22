@@ -59,8 +59,30 @@ def test_target_covers_a_typical_spread():
     """At a 0.25 spread the target must still be several spreads away."""
     inp = parse_inputs()
     assert inp["InpTakeProfit"] >= inp["InpMinTargetSpreadRatio"] * 0.25
-    # and the spread filter itself (points, 2-digit feed) allows no worse than that
-    assert inp["InpMaxSpreadPoints"] * 0.01 * inp["InpMinTargetSpreadRatio"] <= inp["InpTakeProfit"] * 1.5
+    # and the spread filter itself allows no much worse than that
+    assert inp["InpMaxSpread"] * inp["InpMinTargetSpreadRatio"] <= inp["InpTakeProfit"] * 1.5
+
+
+def test_spread_limit_is_in_price_not_points():
+    """35 points is 0.35 on a 2-digit feed but 0.035 on Exness's 3-digit
+    XAUUSDm -- narrower than any real spread, so nothing ever opened."""
+    inp = parse_inputs()
+    assert "InpMaxSpreadPoints" not in inp
+    assert 0.15 <= inp["InpMaxSpread"] <= 1.0
+    assert "g_maxSpreadPrice = InpMaxSpread;" in src()
+
+
+def test_every_skip_reason_has_a_name():
+    s = src()
+    enum = re.search(r"enum ENUM_BLOCK\s*\{([^}]*)\}", s).group(1)
+    members = [m.strip().split("=")[0].strip() for m in enum.split(",") if m.strip()]
+    assert members[-1] == "BLK_COUNT"
+    names = re.search(r"g_blockName\[(\d+)\]\s*=\s*\{([^}]*)\}", s)
+    assert int(names.group(1)) == len(members) - 1
+    assert len(re.findall(r'"[^"]*"', names.group(2))) == len(members) - 1
+    assert re.search(r"g_blockCount\[%d\]" % (len(members) - 1), s)
+    for m in members[:-1]:
+        assert f"Block({m})" in s, f"{m} is never counted"
 
 
 def test_risk_is_modest_for_a_high_frequency_ea():

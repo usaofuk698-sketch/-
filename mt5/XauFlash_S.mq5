@@ -77,8 +77,8 @@ input group "=== Execution ==="
 input long   InpMagicNumber        = 770633; // Identifies this EA's own trades.
                                              // MUST differ from the other EAs:
                                              // 770577 / 770588 / 770599 / 770611 / 770622.
-input int    InpMaxSpreadPoints    = 35;     // Skip entries above this spread, IN POINTS (as MT5 shows it)
-input int    InpSlippagePoints     = 20;     // Max deviation on market orders
+input double InpMaxSpread          = 0.30;   // Skip entries above this spread, in USD/oz (not points)
+input int    InpSlippagePoints     = 50;     // Max deviation on market orders (points)
 input int    InpTimerMs            = 200;    // How often the hold timer is checked (ms)
 
 input group "=== Signal: the burst ==="
@@ -139,6 +139,27 @@ int      g_timerExits    = 0;    // closed by the hold timer, not SL/TP
 
 string   g_status        = "starting";
 
+// Why entries were skipped, so "no trades" always comes with a reason.
+// Counted per tick and printed once a day and when the EA stops.
+enum ENUM_BLOCK
+  {
+   BLK_HALTED = 0, BLK_DAY, BLK_SESSION, BLK_MAXTRADES, BLK_COOLDOWN, BLK_SPREAD,
+   BLK_AUTOTRADING, BLK_NO_BURST, BLK_BURST_VS_SPREAD, BLK_TARGET_VS_SPREAD,
+   BLK_SIZE, BLK_ORDER_FAILED, BLK_COUNT
+  };
+// Sized by a literal (12 = BLK_COUNT): an enum value as an array bound is
+// not worth the risk in a file that cannot be test-compiled here.
+string   g_blockName[12] = {"halted", "not a trading day", "outside session",
+                                   "max trades/day", "cooldown", "spread too wide",
+                                   "AutoTrading off", "no burst", "burst < N x spread",
+                                   "target < N x spread", "lot size below minimum",
+                                   "order rejected"};
+long     g_blockCount[12];
+double   g_maxBurstSeen  = 0.0;   // largest |move| in the window, since the last report
+double   g_minSpreadSeen = 0.0;
+double   g_maxSpreadSeen = 0.0;
+int      g_entriesSinceReport = 0;
+
 // False in a non-visual Strategy Tester run. Building the panel text on every
 // tick is harmless live but, over the millions of real ticks a tester run
 // replays, it is most of the run time -- and nobody can see it anyway.
@@ -177,8 +198,11 @@ int OnInit()
       return(INIT_FAILED);
      }
 
-   double pointSize = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
-   g_maxSpreadPrice = InpMaxSpreadPoints * pointSize;
+   // Entered in USD/oz, not points. A points limit means 0.35 USD on a
+   // 2-digit gold feed and 0.035 on a 3-digit one (Exness XAUUSDm) -- which
+   // is narrower than any real spread and silently blocks every entry.
+   g_maxSpreadPrice = InpMaxSpread;
+   ArrayInitialize(g_blockCount, 0);
 
    PrintFormat("XauFlash started on %s | server GMT offset %+d h | tick %.5f, tick value %.5f, "
                "lots %.2f-%.2f step %.2f | stops level %d pts",
@@ -188,8 +212,8 @@ int OnInit()
                InpSessionStartHour, InpSessionEndHour,
                (InpSessionStartHour + g_gmtOffsetHrs + 24) % 24,
                (InpSessionEndHour   + g_gmtOffsetHrs + 24) % 24);
-   PrintFormat("Max spread: %d points = %.2f USD/oz (symbol digits %d)",
-               InpMaxSpreadPoints, g_maxSpreadPrice, (int)_Digits);
+   PrintFormat("Max spread: %.2f USD/oz (symbol digits %d, current spread %.3f)",
+               g_maxSpreadPrice, (int)_Digits, CurrentSpread());
    PrintFormat("Signal: >= %.2f move in %d ms on >= %d ticks | TP %.2f  SL %.2f  hold <= %d s",
                InpBurstMinMove, InpBurstWindowMs, InpBurstMinTicks,
                InpTakeProfit, InpStopLoss, InpMaxHoldSeconds);
@@ -198,6 +222,20 @@ int OnInit()
    if(minOff > 0.0 && (InpStopLoss < minOff || InpTakeProfit < minOff))
       PrintFormat("WARNING: the broker's minimum stop distance is %.2f; SL/TP below that "
                   "will be widened to it.", minOff);
+
+   // Say plainly if the account is too small to size a trade at this risk,
+   // instead of leaving the user to wonder why nothing ever opens.
+   if(InpFixedLots <= 0.0)
+     {
+      double eq0     = AccountInfoDouble(ACCOUNT_EQUITY);
+      double budget0 = eq0 * InpRiskPercent / 100.0;
+      double minLoss = MathMax(InpStopLoss, minOff) / g_tickSize * g_tickValue * g_volMin;
+      if(minLoss > budget0)
+         PrintFormat("WARNING: NO TRADE CAN OPEN. The smallest lot (%.2f) loses %.2f at the stop, "
+                     "but %.2f%% of %.2f equity is only %.2f. Raise RiskPercent, lower StopLoss, "
+                     "or set FixedLots = %.2f.",
+                     g_volMin, minLoss, InpRiskPercent, eq0, budget0, g_volMin);
+     }
 
    if(tester)
       Print("TESTER: this EA is only meaningful with 'Every tick based on real ticks'. "
@@ -216,6 +254,7 @@ int OnInit()
 void OnDeinit(const int reason)
   {
    EventKillTimer();
+   ReportBlocks("final");
    if(g_fills > 0)
       PrintFormat("XauFlash stopped. %d fills, average slippage %.3f USD/oz, %d closed by the hold timer.",
                   g_fills, g_slipSum / g_fills, g_timerExits);
@@ -445,6 +484,36 @@ int DetectBurst(long nowMs, double &move, int &ticks, double &dirShare)
   }
 
 //+------------------------------------------------------------------+
+//| Why nothing happened: counts of every blocked entry, by reason.  |
+//+------------------------------------------------------------------+
+void Block(ENUM_BLOCK b)
+  {
+   g_blockCount[b]++;
+  }
+
+void ReportBlocks(string label)
+  {
+   long total = 0;
+   for(int i = 0; i < BLK_COUNT; i++) total += g_blockCount[i];
+   if(total == 0 && g_entriesSinceReport == 0) return;
+
+   PrintFormat("---- XauFlash %s report: %d entries | biggest burst %.2f (need %.2f) | "
+               "spread %.3f-%.3f (max %.2f) ----",
+               label, g_entriesSinceReport, g_maxBurstSeen, InpBurstMinMove,
+               g_minSpreadSeen, g_maxSpreadSeen, g_maxSpreadPrice);
+   for(int i = 0; i < BLK_COUNT; i++)
+      if(g_blockCount[i] > 0)
+         PrintFormat("   skipped %-22s %9I64d ticks  (%.1f%%)",
+                     g_blockName[i], g_blockCount[i], 100.0 * g_blockCount[i] / total);
+
+   ArrayInitialize(g_blockCount, 0);
+   g_maxBurstSeen = 0.0;
+   g_minSpreadSeen = 0.0;
+   g_maxSpreadSeen = 0.0;
+   g_entriesSinceReport = 0;
+  }
+
+//+------------------------------------------------------------------+
 //| DAILY STATE                                                      |
 //+------------------------------------------------------------------+
 void ResetDailyState(bool firstRun)
@@ -468,7 +537,10 @@ void RollDailyStateIfNeeded()
    MqlDateTime t;
    TimeToStruct(ToGmt(TimeCurrent()), t);
    if(t.day_of_year != g_dayOfYear)
+     {
+      ReportBlocks("daily");
       ResetDailyState(false);
+     }
   }
 
 //+------------------------------------------------------------------+
@@ -571,19 +643,21 @@ double CurrentSpread()
 
 bool MayOpen(datetime now, string &reason)
   {
-   if(g_halted)                              { reason = g_haltReason;        return(false); }
-   if(!IsTradingDay(GmtDayOfWeek(now)))      { reason = "not a trading day"; return(false); }
-   if(!InSession(now))                       { reason = "outside session";   return(false); }
+   if(g_halted)                              { Block(BLK_HALTED);  reason = g_haltReason;        return(false); }
+   if(!IsTradingDay(GmtDayOfWeek(now)))      { Block(BLK_DAY);     reason = "not a trading day"; return(false); }
+   if(!InSession(now))                       { Block(BLK_SESSION); reason = "outside session";   return(false); }
    if(InpMaxTradesPerDay > 0 && g_tradesToday >= InpMaxTradesPerDay)
-      { reason = "max trades/day"; return(false); }
+      { Block(BLK_MAXTRADES); reason = "max trades/day"; return(false); }
    if(InpCooldownSeconds > 0 && g_lastCloseTime > 0 && now - g_lastCloseTime < InpCooldownSeconds)
-      { reason = StringFormat("cooldown %ds", (int)(InpCooldownSeconds - (now - g_lastCloseTime))); return(false); }
+      { Block(BLK_COOLDOWN); reason = "cooldown"; return(false); }
 
    double spread = CurrentSpread();
+   if(g_minSpreadSeen <= 0.0 || spread < g_minSpreadSeen) g_minSpreadSeen = spread;
+   if(spread > g_maxSpreadSeen) g_maxSpreadSeen = spread;
    if(spread > g_maxSpreadPrice)
-      { reason = StringFormat("spread %.2f > %.2f", spread, g_maxSpreadPrice); return(false); }
-   if(!TerminalInfoInteger(TERMINAL_TRADE_ALLOWED)) { reason = "AutoTrading off"; return(false); }
-   if(!AccountInfoInteger(ACCOUNT_TRADE_EXPERT))    { reason = "EA trading off";  return(false); }
+      { Block(BLK_SPREAD); reason = StringFormat("spread %.3f > %.2f", spread, g_maxSpreadPrice); return(false); }
+   if(!TerminalInfoInteger(TERMINAL_TRADE_ALLOWED)) { Block(BLK_AUTOTRADING); reason = "AutoTrading off"; return(false); }
+   if(!AccountInfoInteger(ACCOUNT_TRADE_EXPERT))    { Block(BLK_AUTOTRADING); reason = "EA trading off";  return(false); }
    return(true);
   }
 
@@ -650,8 +724,10 @@ void TryEntry(const MqlTick &tk)
    double move, dirShare;
    int    ticks;
    int    dir = DetectBurst(nowMs, move, ticks, dirShare);
+   if(MathAbs(move) > g_maxBurstSeen) g_maxBurstSeen = MathAbs(move);
    if(dir == 0)
      {
+      Block(BLK_NO_BURST);
       if(g_panel)
          g_status = StringFormat("watching: %+.2f in %d ticks (%.0f%% one-way)",
                               move, ticks, dirShare * 100.0);
@@ -661,11 +737,13 @@ void TryEntry(const MqlTick &tk)
    double spread = CurrentSpread();
    if(spread > 0.0 && MathAbs(move) < InpBurstSpreadMult * spread)
      {
+      Block(BLK_BURST_VS_SPREAD);
       g_status = StringFormat("burst %.2f < %.1fx spread %.2f", MathAbs(move), InpBurstSpreadMult, spread);
       return;
      }
    if(spread > 0.0 && InpTakeProfit < InpMinTargetSpreadRatio * spread)
      {
+      Block(BLK_TARGET_VS_SPREAD);
       g_status = StringFormat("target %.2f < %.1fx spread %.2f", InpTakeProfit, InpMinTargetSpreadRatio, spread);
       return;
      }
@@ -677,6 +755,7 @@ void TryEntry(const MqlTick &tk)
    double lots = CalcLots(slDist);
    if(lots <= 0.0)
      {
+      Block(BLK_SIZE);
       g_status = "size below broker minimum - equity too small for this risk %";
       return;
      }
@@ -701,6 +780,7 @@ void TryEntry(const MqlTick &tk)
    if(!ok || (trade.ResultRetcode() != TRADE_RETCODE_DONE &&
               trade.ResultRetcode() != TRADE_RETCODE_PLACED))
      {
+      Block(BLK_ORDER_FAILED);
       g_status = StringFormat("order failed: %d %s", trade.ResultRetcode(), trade.ResultRetcodeDescription());
       PrintFormat("ORDER FAILED retcode=%d (%s) lots=%.2f", trade.ResultRetcode(),
                   trade.ResultRetcodeDescription(), lots);
@@ -717,6 +797,7 @@ void TryEntry(const MqlTick &tk)
       g_slipSum += slip;
      }
 
+   g_entriesSinceReport++;
    g_status = StringFormat("opened %s %.2f lots", (dir > 0 ? "BUY" : "SELL"), lots);
    PrintFormat("%s %.2f @ %.2f (quote %.2f, slip %+.2f) sl=%.2f tp=%.2f | burst %+.2f in %d ticks, spread %.2f",
                (dir > 0 ? "BUY" : "SELL"), lots, fill, price, slip, sl, tp, move, ticks, spread);
@@ -788,7 +869,7 @@ void DrawPanel()
       "-----------------------------------------\n"
       "server %s   (GMT%+d)   GMT hour %02d\n"
       "session %02d-%02d GMT      in session: %s\n"
-      "spread %.2f  (max %.2f = %d pts)\n"
+      "spread %.3f  (max %.2f)\n"
       "-----------------------------------------\n"
       "equity      %.2f      risk/trade %.2f%%\n"
       "day P/L     %.2f      limit %.1f%%\n"
@@ -798,7 +879,7 @@ void DrawPanel()
       _Symbol,
       TimeToString(now, TIME_DATE|TIME_SECONDS), g_gmtOffsetHrs, GmtHour(now),
       InpSessionStartHour, InpSessionEndHour, (InSession(now) ? "yes" : "no"),
-      CurrentSpread(), g_maxSpreadPrice, InpMaxSpreadPoints,
+      CurrentSpread(), g_maxSpreadPrice,
       equity, InpRiskPercent,
       g_dayRealisedPnl, InpMaxDailyLossPct,
       g_tradesToday, InpMaxTradesPerDay, g_consecLosses, InpMaxConsecLosses,

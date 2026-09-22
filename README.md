@@ -213,7 +213,7 @@ parameter that walk-forward is free to find worthless.
 | Entry | bid moves ≥ 0.60 in the last 3000 ms, on ≥ 6 ticks, ≥ 70% of steps one way, and ≥ 3× the live spread |
 | Exit | TP 0.80 / SL 0.80 **sent to the server with the order**, or market close after `MaxHoldSeconds` (15 s) |
 | Timer | a 200 ms timer enforces the hold limit even when no ticks arrive |
-| Guards | 0.5% risk per trade, 3% daily loss, 5-loss streak, 40 trades/day, 20 s cooldown, 35-point spread cap, 07–20 GMT |
+| Guards | 0.5% risk per trade, 3% daily loss, 5-loss streak, 40 trades/day, 20 s cooldown, 0.30 USD spread cap, 07–20 GMT |
 | Install | `mt5/installer/Install-XauFlash.bat`, attach to any XAUUSD chart (the timeframe does not matter) |
 
 Honest caveats, also printed in the file header:
