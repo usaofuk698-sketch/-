@@ -39,6 +39,10 @@ PARAM_MAP = {
     "InpBreakevenOffAtr": "breakeven_offset_atr",
     "InpTrailAtR": "trail_at_r",
     "InpTrailAtrMult": "trail_atr_mult",
+    "InpUseImmediateBreakout": "use_immediate_breakout",
+    "InpImmBreakoutMinStrength": "immediate_breakout_min_strength",
+    "InpImmBreakoutRR": "immediate_breakout_reward_risk",
+    "InpImmBreakoutStopAtrMult": "immediate_breakout_stop_atr_mult",
 }
 
 
@@ -94,9 +98,9 @@ def test_entry_snapshots_state_before_advancing():
     snap_idx = re.search(r"g_retestLevel\s*=\s*g_pendingLevel", src).start()
     advance_idx = src.index("AdvancePendingBreakout();")
     assert snap_idx < advance_idx
-    # TryEntry itself must read the snapshot, never the live pending state.
-    entry_start = src.index("void TryEntry()")
-    entry_end = src.index("void OpenTrade(")
+    # TryEntryRetest itself must read the snapshot, never the live pending state.
+    entry_start = src.index("bool TryEntryRetest()")
+    entry_end = src.index("void TryEntryImmediate(")
     try_entry_body = src[entry_start:entry_end]
     assert "g_retestLevel" in try_entry_body
     assert "g_pendingLevel" not in try_entry_body
@@ -109,8 +113,8 @@ def test_cooldown_gates_before_regime_checks_and_updates_on_both_sides():
     not on the ATR/ADX checks alone, which the Python side's raw-conditions
     function also requires before counting a bar as having fired."""
     src = MQ5.read_text()
-    entry_start = src.index("void TryEntry()")
-    entry_end = src.index("void OpenTrade(")
+    entry_start = src.index("bool TryEntryRetest()")
+    entry_end = src.index("void TryEntryImmediate(")
     body = src[entry_start:entry_end]
 
     no_pending_idx = body.index("no pending breakout to retest")
@@ -243,7 +247,12 @@ def _mkey(mq):
     if mq is None:
         return None
     side, sl, tp, risk_mult = mq
-    return (side, round(sl, 6), round(tp, 4), round(risk_mult, 4))
+    # Cast off numpy.float64 before rounding: its __round__ uses a different
+    # algorithm from Python's native float.__round__ and can land a hair on
+    # the other side of a decimal boundary for an otherwise bit-identical
+    # value -- a false mismatch that has nothing to do with the strategy
+    # logic being compared.
+    return (side, round(float(sl), 6), round(float(tp), 4), round(float(risk_mult), 4))
 
 
 def test_entry_decisions_are_identical(long_bars):
@@ -290,3 +299,93 @@ def test_transliteration_catches_a_drifted_quality_score(long_bars):
         if pk != mk:
             mismatches += 1
     assert mismatches > 0, "a drifted quality-to-reward mapping went undetected"
+
+
+# --------------------------------------------------------------------------
+# Opt-in second trigger: immediate breakout (no retest wait)
+# --------------------------------------------------------------------------
+
+def test_immediate_breakout_off_by_default():
+    assert BreakoutRetestParams().use_immediate_breakout is False
+    inputs = parse_inputs()
+    assert inputs["InpUseImmediateBreakout"] is False
+
+
+def test_retest_path_gets_first_refusal():
+    """TryEntry() must try the retest path first and only fall through to the
+    immediate one when it did not fire -- mirroring entry()'s dispatcher,
+    which tries _entry_retest() before _entry_immediate()."""
+    src = MQ5.read_text()
+    dispatcher = src[src.index("void TryEntry()"):src.index("bool TryEntryRetest()")]
+    assert "TryEntryRetest()" in dispatcher
+    assert "TryEntryImmediate()" in dispatcher
+    assert dispatcher.index("TryEntryRetest()") < dispatcher.index("TryEntryImmediate()")
+    assert "InpUseImmediateBreakout" in dispatcher
+
+
+def test_immediate_breakout_shares_regime_and_cooldown_gates():
+    """The immediate trigger must reuse the same ATR-regime/ADX/HTF gate as
+    the retest path, and the same cooldown clock, not a separate looser set
+    of rules -- see BreakoutRetest._regime_gate_pass in the Python side."""
+    src = MQ5.read_text()
+    advance_body = src[src.index("void AdvancePendingBreakout("):src.index("void TryEntry(")]
+    imm_block = advance_body[advance_body.index("InpUseImmediateBreakout"):]
+    assert "InpAtrMinMult * medAtr" in imm_block
+    assert "InpAtrMaxMult * medAtr" in imm_block
+    assert "InpAdxMin" in imm_block
+    assert "InpRequireHtfAlign" in imm_block
+
+    imm_entry_body = src[src.index("void TryEntryImmediate("):src.index("double Clamp01(")]
+    assert "InpCooldownBars" in imm_entry_body
+
+
+def mql5_entry_immediate(i: int, feat, p: BreakoutRetestParams):
+    """Mirror of TryEntryImmediate()/OpenTrade() in XauRetest_M5.mq5.
+
+    Like ``mql5_entry`` above, ``close`` stands in for the live ASK/BID
+    ``price`` the real EA uses -- the broker-specific min-stop-distance
+    clamp is execution detail out of scope for a strategy-logic parity test,
+    same convention the retest mirror already uses.
+    """
+    a = {c: feat[c].to_numpy(float) for c in
+         ("close", "atr", "breakout_now_side", "breakout_now_strength", "cooldown_ok")}
+
+    side_v = a["breakout_now_side"][i]
+    if side_v == 0.0:
+        return None
+    if a["cooldown_ok"][i] < 0.5:
+        return None
+
+    atr_v = a["atr"][i]
+    close = a["close"][i]
+    strength = a["breakout_now_strength"][i]
+    if not np.isfinite(atr_v) or atr_v <= 0 or not np.isfinite(strength):
+        return None
+
+    quality = _clamp01(strength)
+    risk_mult = 1.0 + quality * (p.quality_max_risk_mult - 1.0)
+
+    if side_v > 0:
+        sl = close - p.immediate_breakout_stop_atr_mult * atr_v
+        tp = close + p.immediate_breakout_reward_risk * (close - sl)
+        return (Side.LONG, sl, tp, risk_mult)
+    sl = close + p.immediate_breakout_stop_atr_mult * atr_v
+    tp = close - p.immediate_breakout_reward_risk * (sl - close)
+    return (Side.SHORT, sl, tp, risk_mult)
+
+
+def test_immediate_entry_decisions_are_identical(long_bars):
+    params = BreakoutRetestParams(use_immediate_breakout=True, immediate_breakout_min_strength=0.30)
+    strategy = BreakoutRetest(params)
+    feat = strategy.prepare(long_bars)
+    bad, signals = [], 0
+    for i in range(strategy.warmup, len(feat)):
+        py = strategy.entry(i, feat)
+        mq = mql5_entry(i, feat, params) or mql5_entry_immediate(i, feat, params)
+        pk, mk = _key(py), _mkey(mq)
+        if pk is not None:
+            signals += 1
+        if pk != mk:
+            bad.append((i, feat.index[i], pk, mk))
+    assert signals > 20, f"only {signals} signals; too few to be a real check"
+    assert not bad, f"{len(bad)} bars disagree; first: {bad[:3]}"

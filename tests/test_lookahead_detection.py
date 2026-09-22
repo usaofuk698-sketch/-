@@ -11,7 +11,7 @@ import pandas as pd
 
 from goldbot.backtest.types import Side, Signal
 from goldbot.strategy.base import Strategy, StrategyParams
-from goldbot.strategy.breakout_retest import BreakoutRetest
+from goldbot.strategy.breakout_retest import BreakoutRetest, BreakoutRetestParams
 from goldbot.strategy.trend_pullback import TrendPullback
 from goldbot.validation.lookahead import audit
 
@@ -107,5 +107,19 @@ def test_breakout_retest_is_causal(long_bars):
     feature for this reason -- a pure function of bars 0..i, identical
     whether computed from the full frame or a prefix ending at i."""
     report = audit(BreakoutRetest(), long_bars, n_checks=25)
+    assert report.passed, report.summary()
+    assert report.checks == 25
+
+
+def test_breakout_retest_immediate_trigger_is_causal(long_bars):
+    """Same audit, with the opt-in immediate-breakout trigger switched on.
+
+    breakout_now_side/breakout_now_strength are computed inside the same
+    sequential loop as retest_level/cooldown_ok, from bar i's own OHLC and
+    already-causal indicators only -- this locks that in the same way the
+    test above locks in the retest path, so the new trigger cannot quietly
+    grow a look-ahead dependency later."""
+    params = BreakoutRetestParams(use_immediate_breakout=True, immediate_breakout_min_strength=0.30)
+    report = audit(BreakoutRetest(params), long_bars, n_checks=25)
     assert report.passed, report.summary()
     assert report.checks == 25

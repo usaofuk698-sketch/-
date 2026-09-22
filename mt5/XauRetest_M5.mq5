@@ -55,6 +55,18 @@
 //| Same invariants as the other EAs: closed bars only (bar 0 is still forming
 //| and is never read), and stops are only ever tightened. Nothing
 //| broker-specific is hardcoded.
+//|
+//| OPTIONAL SECOND TRIGGER: IMMEDIATE BREAKOUT (InpUseImmediateBreakout, OFF)
+//| The retest requirement above is the entire strategy, and also its entire
+//| cost -- some real breakouts never come back to retest before running
+//| away. This adds a SEPARATE, additive trigger that fires on the breakout
+//| bar itself when it is stronger than the bare arming minimum
+//| (InpImmBreakoutMinStrength), gated by the same regime/ADX/HTF filters and
+//| the same cooldown as the retest path, and unable to overlap a live
+//| retest-based position -- see TryEntry()/TryEntryRetest()/
+//| TryEntryImmediate(). OFF by default: unlike InpRequireHtfAlign (an
+//| established technique used here for the first time), this trigger has no
+//| real Strategy Tester evidence behind it yet.
 //+------------------------------------------------------------------+
 #property copyright "XauRetest"
 #property link      ""
@@ -178,6 +190,30 @@ input double InpQualityMaxRR       = 3.00;   // Reward:risk at quality score 1 (
 input bool   InpUseMeasuredMove    = true;   // Also let the target reach the broken range's own height
 input double InpQualityMaxRiskMult = 1.50;   // Position-size multiplier at quality score 1. NEVER a 2nd trade -- see file header.
 
+input group "=== Strategy: optional second trigger -- immediate breakout (OFF by default) ==="
+// The retest requirement above is the whole strategy, and also its whole
+// cost: some real breakouts never come back to retest before running away,
+// and those are pure missed trades. This borrows XauBreak's philosophy
+// (enter on the break itself) as a SEPARATE, additive trigger, not a change
+// to what counts as a retest -- it fires only on a breakout bar stronger
+// than the bare arming minimum (InpMinBarRangeAtr), still gated by the same
+// regime/ADX/HTF-alignment filters and the same cooldown as the retest path
+// above, and can never overlap a live retest-based position (one position
+// at a time, enforced by HasOpenPosition()). With no retest bar to size
+// precision/rejection from, its quality score is the breakout strength
+// alone and its stop/target are plain ATR multiples rather than the
+// retest-anchored ones above.
+// OFF by default: this is a brand-new trigger with zero real Strategy
+// Tester evidence behind it yet, unlike InpRequireHtfAlign (an established
+// technique applied here for the first time). Turning it on trades some of
+// the "waited for confirmation, missed the move" cost for a fresh, unproven
+// source of losses -- exactly what this file's whole history says needs its
+// own real-data proof before it can default to on.
+input bool   InpUseImmediateBreakout   = false;
+input double InpImmBreakoutMinStrength = 0.60;  // 0-1 bar strength; stricter than bare arming
+input double InpImmBreakoutRR          = 2.00;
+input double InpImmBreakoutStopAtrMult = 1.20;
+
 input group "=== Strategy: in-trade management ==="
 input bool   InpUseBreakeven       = true;
 input double InpBreakevenAtR       = 1.0;    // Move to break-even at this R
@@ -226,6 +262,13 @@ double   g_retestWidth     = 0.0;
 // audit calls entry() twice at the same bar), simple persistent state is
 // safe and sufficient here.
 datetime g_lastFireBarTime = 0;
+
+// --- opt-in immediate-breakout trigger: a fresh snapshot recomputed every
+// closed bar by AdvancePendingBreakout() (0 = this bar is not one), never
+// carried across bars -- unlike the pending-retest state above, this is not
+// something waiting to be resolved later, only a fact about THIS bar.
+int      g_immSide      = 0;
+double   g_immStrength  = 0.0;
 
 // --- symbol spec, resolved once in OnInit
 double   g_maxSpreadPrice = 0.0;  // InpMaxSpreadPoints converted to price units
@@ -371,6 +414,15 @@ bool ValidateInputs()
    if(InpMinStopDistance <= 0.0)     { Print("ERROR: MinStopDistance must be > 0"); return(false); }
    if(InpMinStopDistance >= InpMaxStopDistance)
      { Print("ERROR: MinStopDistance must be < MaxStopDistance"); return(false); }
+   if(InpUseImmediateBreakout)
+     {
+      if(InpImmBreakoutMinStrength < 0.0 || InpImmBreakoutMinStrength > 1.0)
+        { Print("ERROR: ImmBreakoutMinStrength must be in [0, 1]"); return(false); }
+      if(InpImmBreakoutRR <= 0.0)
+        { Print("ERROR: ImmBreakoutRR must be > 0"); return(false); }
+      if(InpImmBreakoutStopAtrMult <= 0.0)
+        { Print("ERROR: ImmBreakoutStopAtrMult must be > 0"); return(false); }
+     }
    return(true);
   }
 
@@ -780,6 +832,14 @@ double MinStopOffset()
 //+------------------------------------------------------------------+
 void AdvancePendingBreakout()
   {
+   // Reset every bar -- see the field comment: this is a fact about THIS
+   // bar, never state carried from a previous one. Set before any early
+   // return below, so a bar where indicator data is not ready simply has no
+   // immediate-breakout candidate, rather than stale leftovers from an
+   // earlier bar.
+   g_immSide     = 0;
+   g_immStrength = 0.0;
+
    MqlRates rates[];
    ArraySetAsSeries(rates, true);
    int wantBars = InpRangeLookback + 2;
@@ -845,6 +905,41 @@ void AdvancePendingBreakout()
       g_pendingStrength = barStrength;
       g_pendingWidth    = rangeHigh - rangeLow;
      }
+
+   //--- opt-in second trigger: is bar i ITSELF a fresh, unusually decisive
+   //--- breakout -- independent of any pending retest state, which reflects
+   //--- bars before this one, never this bar's own. Gated by the same
+   //--- regime/ADX/HTF filters as the retest path (TryEntry() below still
+   //--- applies the same cooldown before acting on this). Skipped entirely
+   //--- when the input is off, so default behaviour is untouched.
+   if(InpUseImmediateBreakout)
+     {
+      bool immUp   = brokeUp   && !brokeDown && (barStrength >= InpImmBreakoutMinStrength);
+      bool immDown = brokeDown && !brokeUp   && (barStrength >= InpImmBreakoutMinStrength);
+      if(immUp || immDown)
+        {
+         double adxBuf[], htfBuf[];
+         if(ReadBuffer(hAdx, 0, 1, 2, adxBuf) && ReadBuffer(hHtfEma, 0, 1, 2, htfBuf))
+           {
+            double medAtr   = MedianAtr(InpRegimeLookback);
+            double adxV     = adxBuf[0];
+            double htfEmaV  = htfBuf[0];
+            int    sideCand = immUp ? 1 : -1;
+            bool regimeOk = (medAtr > 0.0)
+                            && (atrV >= InpAtrMinMult * medAtr)
+                            && (atrV <= InpAtrMaxMult * medAtr)
+                            && (InpAdxMin <= 0.0 || adxV >= InpAdxMin)
+                            && (!InpRequireHtfAlign
+                                || (sideCand == 1  && close > htfEmaV)
+                                || (sideCand == -1 && close < htfEmaV));
+            if(regimeOk)
+              {
+               g_immSide     = sideCand;
+               g_immStrength = barStrength;
+              }
+           }
+        }
+     }
   }
 
 //+------------------------------------------------------------------+
@@ -859,13 +954,33 @@ void TryEntry()
       return;
      }
 
+   // The retest path always gets first refusal -- it is the confirmed,
+   // validated setup. The opt-in immediate path is only tried when the
+   // retest path did not even construct a signal this bar (never when it
+   // did but OpenTrade() itself later rejected it, exactly mirroring the
+   // Python dispatcher: entry() tries the retest signal first and only
+   // falls through to the immediate one when that call returned None).
+   if(TryEntryRetest())
+      return;
+   if(InpUseImmediateBreakout)
+      TryEntryImmediate();
+  }
+
+//+------------------------------------------------------------------+
+//| Primary trigger: breakout, then a proven retest. Returns true the |
+//| moment a signal is constructed and handed to OpenTrade() -- even  |
+//| if OpenTrade() itself then rejects it (bad stop, size too small,  |
+//| ...) -- so the caller knows not to also try the immediate path.   |
+//+------------------------------------------------------------------+
+bool TryEntryRetest()
+  {
    //--- TryEntry reads the SNAPSHOT taken before this bar's own advance, never
    //--- the pending state that AdvancePendingBreakout() just mutated -- see
    //--- the file header.
    if(g_retestSide == 0)
      {
       g_status = "no pending breakout to retest";
-      return;
+      return(false);
      }
 
    datetime thisBarTime = iTime(_Symbol, PERIOD_CURRENT, 1);   // the last CLOSED bar
@@ -875,7 +990,7 @@ void TryEntry()
       if(barsSinceFire < InpCooldownBars)
         {
          g_status = StringFormat("cooldown (%d/%d bars)", barsSinceFire, InpCooldownBars);
-         return;
+         return(false);
         }
      }
 
@@ -884,7 +999,7 @@ void TryEntry()
       || !ReadBuffer(hHtfEma, 0, 1, 2, htfEma))
      {
       g_status = "indicator data not ready";
-      return;
+      return(false);
      }
 
    MqlRates rates[];
@@ -892,28 +1007,28 @@ void TryEntry()
    if(CopyRates(_Symbol, PERIOD_CURRENT, 1, 2, rates) != 2)
      {
       g_status = "price data not ready";
-      return;
+      return(false);
      }
 
    double close = rates[0].close, high_ = rates[0].high, low_ = rates[0].low;
    double atrV = atr[0], adxV = adx[0], htfEmaV = htfEma[0];
-   if(atrV <= 0.0) { g_status = "ATR unavailable"; return; }
+   if(atrV <= 0.0) { g_status = "ATR unavailable"; return(false); }
 
    double medAtr = MedianAtr(InpRegimeLookback);
-   if(medAtr <= 0.0) { g_status = "regime ATR unavailable"; return; }
-   if(atrV < InpAtrMinMult * medAtr) { g_status = "volatility too low";  return; }
-   if(atrV > InpAtrMaxMult * medAtr) { g_status = "volatility too high"; return; }
+   if(medAtr <= 0.0) { g_status = "regime ATR unavailable"; return(false); }
+   if(atrV < InpAtrMinMult * medAtr) { g_status = "volatility too low";  return(false); }
+   if(atrV > InpAtrMaxMult * medAtr) { g_status = "volatility too high"; return(false); }
    if(InpAdxMin > 0.0 && adxV < InpAdxMin)
      {
       g_status = StringFormat("ADX %.1f < %.1f", adxV, InpAdxMin);
-      return;
+      return(false);
      }
    if(InpRequireHtfAlign)
      {
       if(g_retestSide == 1 && close <= htfEmaV)
-        { g_status = "against higher-timeframe trend (long)"; return; }
+        { g_status = "against higher-timeframe trend (long)"; return(false); }
       if(g_retestSide == -1 && close >= htfEmaV)
-        { g_status = "against higher-timeframe trend (short)"; return; }
+        { g_status = "against higher-timeframe trend (short)"; return(false); }
      }
 
    double barRange = high_ - low_;
@@ -929,7 +1044,7 @@ void TryEntry()
       //--- former resistance, now expected to hold as support
       bool retestOk = (low_ <= g_retestLevel + tol) && (close > g_retestLevel)
                       && (closePos >= InpRetestClosePosMin);
-      if(!retestOk) { g_status = "no valid retest (support)"; return; }
+      if(!retestOk) { g_status = "no valid retest (support)"; return(false); }
       g_lastFireBarTime = thisBarTime;
 
       double precision = (tol > 0.0) ? (1.0 - MathAbs(low_ - g_retestLevel) / tol) : 0.5;
@@ -947,13 +1062,14 @@ void TryEntry()
       tp       = price + tpDist;
       riskMult = 1.0 + quality * (InpQualityMaxRiskMult - 1.0);
       OpenTrade(ORDER_TYPE_BUY, price, sl, tp, atrV, riskMult, quality);
+      return(true);
      }
    else
      {
       //--- former support, now expected to hold as resistance
       bool retestOk = (high_ >= g_retestLevel - tol) && (close < g_retestLevel)
                       && ((1.0 - closePos) >= InpRetestClosePosMin);
-      if(!retestOk) { g_status = "no valid retest (resistance)"; return; }
+      if(!retestOk) { g_status = "no valid retest (resistance)"; return(false); }
       g_lastFireBarTime = thisBarTime;
 
       double precision = (tol > 0.0) ? (1.0 - MathAbs(high_ - g_retestLevel) / tol) : 0.5;
@@ -970,6 +1086,67 @@ void TryEntry()
       if(InpUseMeasuredMove && g_retestWidth > 0.0) tpDist = MathMax(tpDist, g_retestWidth);
       tp       = price - tpDist;
       riskMult = 1.0 + quality * (InpQualityMaxRiskMult - 1.0);
+      OpenTrade(ORDER_TYPE_SELL, price, sl, tp, atrV, riskMult, quality);
+      return(true);
+     }
+  }
+
+//+------------------------------------------------------------------+
+//| Opt-in second trigger: fires on the breakout bar itself, using    |
+//| the fresh per-bar snapshot AdvancePendingBreakout() left in       |
+//| g_immSide/g_immStrength. Only reached when the retest path above  |
+//| did not fire this bar (see TryEntry()).                           |
+//+------------------------------------------------------------------+
+void TryEntryImmediate()
+  {
+   if(g_immSide == 0)
+     {
+      g_status = "no immediate breakout";
+      return;
+     }
+
+   datetime thisBarTime = iTime(_Symbol, PERIOD_CURRENT, 1);   // the last CLOSED bar
+   if(g_lastFireBarTime != 0)
+     {
+      int barsSinceFire = iBarShift(_Symbol, PERIOD_CURRENT, g_lastFireBarTime, false);
+      if(barsSinceFire < InpCooldownBars)
+        {
+         g_status = StringFormat("cooldown (%d/%d bars)", barsSinceFire, InpCooldownBars);
+         return;
+        }
+     }
+
+   double atr[];
+   if(!ReadBuffer(hAtr, 0, 1, 2, atr))
+     {
+      g_status = "indicator data not ready";
+      return;
+     }
+   double atrV = atr[0];
+   if(atrV <= 0.0) { g_status = "ATR unavailable"; return; }
+
+   double close   = iClose(_Symbol, PERIOD_CURRENT, 1);   // last CLOSED bar
+   double minOff  = MinStopOffset();
+   double quality  = Clamp01(g_immStrength);
+   double riskMult = 1.0 + quality * (InpQualityMaxRiskMult - 1.0);
+   double price, sl, tp;
+
+   if(g_immSide == 1)
+     {
+      price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+      sl    = close - InpImmBreakoutStopAtrMult * atrV;
+      if(sl >= price - minOff) sl = price - MathMax(minOff, InpMinStopDistance);
+      tp    = price + InpImmBreakoutRR * (price - sl);
+      g_lastFireBarTime = thisBarTime;
+      OpenTrade(ORDER_TYPE_BUY, price, sl, tp, atrV, riskMult, quality);
+     }
+   else
+     {
+      price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+      sl    = close + InpImmBreakoutStopAtrMult * atrV;
+      if(sl <= price + minOff) sl = price + MathMax(minOff, InpMinStopDistance);
+      tp    = price - InpImmBreakoutRR * (sl - price);
+      g_lastFireBarTime = thisBarTime;
       OpenTrade(ORDER_TYPE_SELL, price, sl, tp, atrV, riskMult, quality);
      }
   }

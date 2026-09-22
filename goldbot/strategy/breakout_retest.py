@@ -150,6 +150,32 @@ class BreakoutRetestParams(StrategyParams):
     # tightens (never loosens), same rule as breakeven.
     trail_at_r: float | None = 1.5
     trail_atr_mult: float = 1.20
+    # -- optional second entry path: immediate breakout, no retest wait
+    # The retest requirement is the entire strategy above -- and also its
+    # entire cost: some fraction of decisive breakouts simply never come back
+    # to retest before running away, and those are pure missed trades, not
+    # avoided losses. This path borrows XauBreak's philosophy (enter on the
+    # break itself) as a SEPARATE, additive trigger rather than changing what
+    # counts as a retest: it fires only on a breakout bar stronger than the
+    # bare arming minimum (min_bar_range_atr), still gated by the same
+    # regime/ADX/HTF-alignment filters and the same cooldown as the retest
+    # path, so it cannot fire more often than those filters already allow and
+    # cannot overlap a live retest-based position (one position at a time,
+    # enforced by the engine). It has no retest bar to size precision/
+    # rejection from, so its quality score is the breakout strength alone and
+    # its stop/target are plain ATR multiples rather than the retest-anchored
+    # ones above.
+    # OFF by default: unlike require_htf_alignment (an established technique
+    # applied here for the first time), this is a brand-new trigger with zero
+    # real Strategy Tester evidence behind it yet. Turning it on trades some
+    # of the "waited for confirmation, missed the move" cost for a fresh,
+    # unproven source of losses -- exactly the kind of change this file's
+    # whole history says needs its own real-data proof before it can default
+    # to on.
+    use_immediate_breakout: bool = False
+    immediate_breakout_min_strength: float = 0.60   # 0-1 bar_strength; stricter than bare arming
+    immediate_breakout_reward_risk: float = 2.00
+    immediate_breakout_stop_atr_mult: float = 1.20
 
 
 class BreakoutRetest(Strategy):
@@ -159,6 +185,7 @@ class BreakoutRetest(Strategy):
         "open", "high", "low", "close", "atr", "adx", "atr_med", "htf_ema",
         "close_pos", "bar_range", "retest_level", "retest_side",
         "retest_strength", "retest_width", "cooldown_ok",
+        "breakout_now_side", "breakout_now_strength",
     )
 
     def __init__(self, params: BreakoutRetestParams | None = None):
@@ -167,22 +194,18 @@ class BreakoutRetest(Strategy):
         self._n: int = -1
 
     @staticmethod
-    def _raw_conditions_pass(
-        side_v: float, level: float, atr_v: float, med: float, adx_v: float,
-        close: float, high_v: float, low_v: float, close_pos: float,
-        htf_ema_v: float, p: "BreakoutRetestParams",
+    def _regime_gate_pass(
+        side_v: float, atr_v: float, med: float, adx_v: float,
+        close: float, htf_ema_v: float, p: "BreakoutRetestParams",
     ) -> bool:
-        """The entry filters, EXCLUDING cooldown, as a single pure function.
+        """ATR-regime, ADX and HTF-alignment gates shared by both entry paths.
 
-        Used from two places: the sequential scan in :meth:`prepare` (to
-        compute, causally, the bar this same check last passed on -- see
-        ``cooldown_ok`` below) and :meth:`entry` itself. One function means
-        the two can never drift apart, which matters here specifically
-        because the cooldown feature would otherwise have to duplicate this
-        logic to stay causal.
+        Extracted so the retest path (:meth:`_raw_conditions_pass`) and the
+        opt-in immediate-breakout path cannot drift apart on what counts as
+        tradeable regime/trend conditions -- they differ only in what they
+        require of the price action itself (a proven retest vs. a single
+        decisive bar), never in these gates.
         """
-        if side_v == 0.0 or not np.isfinite(level):
-            return False
         if not (np.isfinite(atr_v) and np.isfinite(med)):
             return False
         if atr_v <= 0 or med <= 0:
@@ -198,6 +221,27 @@ class BreakoutRetest(Strategy):
                 return False
             if side_v < 0 and close >= htf_ema_v:
                 return False
+        return True
+
+    @staticmethod
+    def _raw_conditions_pass(
+        side_v: float, level: float, atr_v: float, med: float, adx_v: float,
+        close: float, high_v: float, low_v: float, close_pos: float,
+        htf_ema_v: float, p: "BreakoutRetestParams",
+    ) -> bool:
+        """The retest-path entry filters, EXCLUDING cooldown, as a pure function.
+
+        Used from two places: the sequential scan in :meth:`prepare` (to
+        compute, causally, the bar this same check last passed on -- see
+        ``cooldown_ok`` below) and :meth:`entry` itself. One function means
+        the two can never drift apart, which matters here specifically
+        because the cooldown feature would otherwise have to duplicate this
+        logic to stay causal.
+        """
+        if side_v == 0.0 or not np.isfinite(level):
+            return False
+        if not BreakoutRetest._regime_gate_pass(side_v, atr_v, med, adx_v, close, htf_ema_v, p):
+            return False
         tol = p.retest_tolerance_atr * atr_v
         if side_v > 0:
             return low_v <= level + tol and close > level and close_pos >= p.retest_close_position_min
@@ -257,6 +301,8 @@ class BreakoutRetest(Strategy):
         strength = np.full(n, np.nan)   # breakout decisiveness, frozen at breakout time
         width = np.full(n, np.nan)      # the broken range's own height, for the measured move
         cooldown_ok = np.zeros(n, dtype=float)
+        breakout_now_side = np.zeros(n, dtype=float)      # opt-in immediate-entry trigger
+        breakout_now_strength = np.full(n, np.nan)
 
         pending_level = float("nan")
         pending_side = 0
@@ -323,11 +369,34 @@ class BreakoutRetest(Strategy):
                     pending_side, pending_level, pending_age = -1, rl, 0
                     pending_strength, pending_width = bar_strength, rh - rl
 
+                # Opt-in second trigger: bar i is ITSELF a fresh, unusually
+                # decisive breakout -- independent of any pending retest state
+                # (which reflects bars before i, never bar i's own). Gated by
+                # the same regime/ADX/HTF filters and the same cooldown_ok[i]
+                # already frozen above (computed from state carried into this
+                # bar, so using it here cannot leak this bar's own result back
+                # into itself). Disabled entirely when the flag is off, so
+                # default behaviour is untouched byte-for-byte.
+                if p.use_immediate_breakout:
+                    imm_side = 0
+                    if broke_up and not broke_down and bar_strength >= p.immediate_breakout_min_strength:
+                        imm_side = 1
+                    elif broke_down and not broke_up and bar_strength >= p.immediate_breakout_min_strength:
+                        imm_side = -1
+                    if imm_side != 0 and cooldown_ok[i] > 0.5 and self._regime_gate_pass(
+                        float(imm_side), atr_a[i], med_a[i], adx_a[i], close_a[i], htf_ema_a[i], p,
+                    ):
+                        breakout_now_side[i] = float(imm_side)
+                        breakout_now_strength[i] = bar_strength
+                        last_fire_bar = i
+
         out["retest_level"] = level
         out["retest_side"] = side
         out["retest_strength"] = strength
         out["retest_width"] = width
         out["cooldown_ok"] = cooldown_ok
+        out["breakout_now_side"] = breakout_now_side
+        out["breakout_now_strength"] = breakout_now_strength
         self._a = {col: out[col].to_numpy(dtype=float) for col in self._FEATURE_COLS}
         self._n = n
         return out
@@ -367,6 +436,16 @@ class BreakoutRetest(Strategy):
         self._bind(feat)
         a = self._a
 
+        sig = self._entry_retest(i, a, p)
+        if sig is not None:
+            return sig
+        if p.use_immediate_breakout:
+            return self._entry_immediate(i, a, p)
+        return None
+
+    def _entry_retest(
+        self, i: int, a: dict[str, np.ndarray], p: "BreakoutRetestParams"
+    ) -> Signal | None:
         level, side_v = a["retest_level"][i], a["retest_side"][i]
         if side_v == 0.0 or not np.isfinite(level):
             return None
@@ -458,6 +537,61 @@ class BreakoutRetest(Strategy):
             meta={
                 "atr": float(atr_v),
                 "level": float(level),
+                "target_distance": float(abs(tp - close)),
+                "quality": float(quality),
+                "risk_multiplier": float(risk_mult),
+            },
+        )
+
+    def _entry_immediate(
+        self, i: int, a: dict[str, np.ndarray], p: "BreakoutRetestParams"
+    ) -> Signal | None:
+        """Opt-in second trigger: enter on the breakout bar itself.
+
+        Everything that makes this safe to fire already happened causally in
+        :meth:`prepare` -- decisiveness above the stricter
+        ``immediate_breakout_min_strength`` bar, the same regime/ADX/HTF gate
+        as the retest path, and the same cooldown. There is no retest bar to
+        size a stop or a precision/rejection score from, so the stop is a
+        plain ATR multiple and the quality score is the breakout strength
+        alone.
+        """
+        side_v = a["breakout_now_side"][i]
+        if side_v == 0.0:
+            return None
+        if a["cooldown_ok"][i] < 0.5:
+            return None
+        atr_v = a["atr"][i]
+        close = a["close"][i]
+        strength = a["breakout_now_strength"][i]
+        if not np.isfinite(atr_v) or atr_v <= 0 or not np.isfinite(strength):
+            return None
+
+        if side_v > 0:
+            sl = close - p.immediate_breakout_stop_atr_mult * atr_v
+            if sl >= close:
+                return None
+            tp_dist = p.immediate_breakout_reward_risk * (close - sl)
+            tp = close + tp_dist
+            side = Side.LONG
+        else:
+            sl = close + p.immediate_breakout_stop_atr_mult * atr_v
+            if sl <= close:
+                return None
+            tp_dist = p.immediate_breakout_reward_risk * (sl - close)
+            tp = close - tp_dist
+            side = Side.SHORT
+
+        quality = self._clamp01(strength)
+        risk_mult = 1.0 + quality * (p.quality_max_risk_mult - 1.0)
+
+        return Signal(
+            side=side,
+            stop_loss=float(sl),
+            take_profit=float(tp),
+            reason="breakout_immediate",
+            meta={
+                "atr": float(atr_v),
                 "target_distance": float(abs(tp - close)),
                 "quality": float(quality),
                 "risk_multiplier": float(risk_mult),

@@ -94,6 +94,15 @@ strategy:
     breakeven_offset_atr: 0.05
     trail_at_r: 1.5             # beyond this, the stop follows price instead of sitting at breakeven
     trail_atr_mult: 1.20
+    # Opt-in second trigger: enter on the breakout bar itself, no retest wait.
+    # Additive to everything above, not a replacement -- see the strategy
+    # docstring for why it is OFF by default (a brand-new, unvalidated
+    # source of trades, unlike require_htf_alignment which is an established
+    # technique used here for the first time).
+    use_immediate_breakout: false
+    immediate_breakout_min_strength: 0.60
+    immediate_breakout_reward_risk: 2.00
+    immediate_breakout_stop_atr_mult: 1.20
 
 walkforward:
   train_bars: 30000
