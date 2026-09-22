@@ -104,10 +104,18 @@ class BreakoutRetestParams(StrategyParams):
     # to a specific observed failure mode, not a blind guess.
     retest_tolerance_atr: float = 0.15   # how close price must come back, in ATR
     retest_close_position_min: float = 0.68   # the retest bar must reject the level cleanly
+    # A screenshot from the same run that motivated the two settings above
+    # showed a second, distinct failure: a trade entered 35 minutes (7 bars)
+    # after the prior one closed, buying right into the top of a fast rally
+    # that had already run far past the level being "retested" -- a classic
+    # chase, and the run's second-worst loss. Reusing retest_max_bars as the
+    # cooldown is deliberate, not a new arbitrary number: it says a fresh
+    # setup needs the same minimum breathing room a retest is given to form,
+    # rather than firing again the moment the last trade's slot frees up.
+    cooldown_bars: int = 12           # bars after ANY entry before the next one is allowed
     # -- stop and target
     stop_atr_buffer: float = 0.20     # beyond the retest bar's own extreme
     min_stop_atr_mult: float = 1.00
-    reward_risk: float = 2.00         # floor: the worst a passing signal ever gets
     min_target_spread_ratio: float = 6.0
     # -- quality score (0-1): how much better than bare-minimum this setup is,
     # averaged from four independent signals so no single one can push the
@@ -138,13 +146,43 @@ class BreakoutRetest(Strategy):
     _FEATURE_COLS = (
         "open", "high", "low", "close", "atr", "adx", "atr_med",
         "close_pos", "bar_range", "retest_level", "retest_side",
-        "retest_strength", "retest_width",
+        "retest_strength", "retest_width", "cooldown_ok",
     )
 
     def __init__(self, params: BreakoutRetestParams | None = None):
         self.params = params or BreakoutRetestParams()
         self._a: dict[str, np.ndarray] = {}
         self._n: int = -1
+
+    @staticmethod
+    def _raw_conditions_pass(
+        side_v: float, level: float, atr_v: float, med: float, adx_v: float,
+        close: float, high_v: float, low_v: float, close_pos: float,
+        p: "BreakoutRetestParams",
+    ) -> bool:
+        """The entry filters, EXCLUDING cooldown, as a single pure function.
+
+        Used from two places: the sequential scan in :meth:`prepare` (to
+        compute, causally, the bar this same check last passed on -- see
+        ``cooldown_ok`` below) and :meth:`entry` itself. One function means
+        the two can never drift apart, which matters here specifically
+        because the cooldown feature would otherwise have to duplicate this
+        logic to stay causal.
+        """
+        if side_v == 0.0 or not np.isfinite(level):
+            return False
+        if not (np.isfinite(atr_v) and np.isfinite(med)):
+            return False
+        if atr_v <= 0 or med <= 0:
+            return False
+        if not (p.atr_min_mult * med <= atr_v <= p.atr_max_mult * med):
+            return False
+        if p.adx_min > 0.0 and (not np.isfinite(adx_v) or adx_v < p.adx_min):
+            return False
+        tol = p.retest_tolerance_atr * atr_v
+        if side_v > 0:
+            return low_v <= level + tol and close > level and close_pos >= p.retest_close_position_min
+        return high_v >= level - tol and close < level and (1.0 - close_pos) >= p.retest_close_position_min
 
     @property
     def warmup(self) -> int:
@@ -179,7 +217,11 @@ class BreakoutRetest(Strategy):
         out["bar_range"] = h - l
 
         atr_a = out["atr"].to_numpy(float)
+        adx_a = out["adx"].to_numpy(float)
+        med_a = out["atr_med"].to_numpy(float)
         close_a = c.to_numpy(float)
+        high_a = h.to_numpy(float)
+        low_a = l.to_numpy(float)
         rh_a = range_high.to_numpy(float)
         rl_a = range_low.to_numpy(float)
         bar_range_a = out["bar_range"].to_numpy(float)
@@ -190,12 +232,14 @@ class BreakoutRetest(Strategy):
         side = np.zeros(n, dtype=float)
         strength = np.full(n, np.nan)   # breakout decisiveness, frozen at breakout time
         width = np.full(n, np.nan)      # the broken range's own height, for the measured move
+        cooldown_ok = np.zeros(n, dtype=float)
 
         pending_level = float("nan")
         pending_side = 0
         pending_age = 0
         pending_strength = float("nan")
         pending_width = float("nan")
+        last_fire_bar = -10**9
 
         for i in range(n):
             # State as carried INTO this bar -- what entry() at i is allowed to
@@ -204,6 +248,21 @@ class BreakoutRetest(Strategy):
             side[i] = float(pending_side)
             strength[i] = pending_strength
             width[i] = pending_width
+
+            # Whether a fresh signal is allowed at bar i is itself a causal,
+            # sequential fact -- "has it been at least cooldown_bars since the
+            # last bar whose OWN raw conditions passed" -- computed here for
+            # the same reason retest_level/side are: entry() cannot look
+            # backward through arbitrary history on its own, and duplicating
+            # this scan inside entry() would make it stateful and unsafe to
+            # call twice at the same bar (which the causality audit does, on
+            # purpose, comparing a full-history call against a truncated one).
+            cooldown_ok[i] = 1.0 if (i - last_fire_bar) >= p.cooldown_bars else 0.0
+            if cooldown_ok[i] > 0.0 and self._raw_conditions_pass(
+                pending_side, pending_level, atr_a[i], med_a[i], adx_a[i],
+                close_a[i], high_a[i], low_a[i], close_pos_a[i], p,
+            ):
+                last_fire_bar = i
 
             if pending_side != 0:
                 pending_age += 1
@@ -244,6 +303,7 @@ class BreakoutRetest(Strategy):
         out["retest_side"] = side
         out["retest_strength"] = strength
         out["retest_width"] = width
+        out["cooldown_ok"] = cooldown_ok
         self._a = {col: out[col].to_numpy(dtype=float) for col in self._FEATURE_COLS}
         self._n = n
         return out
@@ -285,6 +345,8 @@ class BreakoutRetest(Strategy):
 
         level, side_v = a["retest_level"][i], a["retest_side"][i]
         if side_v == 0.0 or not np.isfinite(level):
+            return None
+        if a["cooldown_ok"][i] < 0.5:
             return None
 
         atr_v, med, adx_v = a["atr"][i], a["atr_med"][i], a["adx"][i]

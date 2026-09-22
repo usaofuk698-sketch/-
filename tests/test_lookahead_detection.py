@@ -11,6 +11,7 @@ import pandas as pd
 
 from goldbot.backtest.types import Side, Signal
 from goldbot.strategy.base import Strategy, StrategyParams
+from goldbot.strategy.breakout_retest import BreakoutRetest
 from goldbot.strategy.trend_pullback import TrendPullback
 from goldbot.validation.lookahead import audit
 
@@ -94,3 +95,17 @@ def test_real_strategy_is_causal(bars):
     report = audit(TrendPullback(), bars, n_checks=15)
     assert report.passed, report.summary()
     assert report.checks == 15
+
+
+def test_breakout_retest_is_causal(long_bars):
+    """Exercises entry() called twice at the same bar (full vs. truncated
+    history), the way audit() always does. This is exactly the scenario a
+    naive stateful cooldown (an instance counter mutated inside entry())
+    would fail: the full-history call updates the counter first, so the
+    truncated call sees a "just fired" cooldown that has nothing to do with
+    its own history and spuriously disagrees. cooldown_ok is a precomputed
+    feature for this reason -- a pure function of bars 0..i, identical
+    whether computed from the full frame or a prefix ending at i."""
+    report = audit(BreakoutRetest(), long_bars, n_checks=25)
+    assert report.passed, report.summary()
+    assert report.checks == 25

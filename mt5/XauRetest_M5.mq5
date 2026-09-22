@@ -138,6 +138,13 @@ input int    InpRetestMaxBars      = 12;     // A level nobody retests in this l
 // breakout_retest.py's BreakoutRetestParams for the full note.
 input double InpRetestToleranceAtr = 0.15;   // How close price must come back, in ATR
 input double InpRetestClosePosMin  = 0.68;   // The retest bar must reject the level cleanly
+// A screenshot from the same run showed a second failure: a trade entered 35
+// minutes (7 bars) after the prior one closed, buying right into the top of
+// a fast rally that had already run past the level being "retested" -- the
+// run's second-worst loss. InpCooldownBars = InpRetestMaxBars is deliberate,
+// not arbitrary: a fresh setup gets the same minimum breathing room a retest
+// itself is allowed.
+input int    InpCooldownBars       = 12;     // Bars after ANY signal before the next is allowed
 
 input group "=== Strategy: stop and target ==="
 input double InpStopAtrBuffer      = 0.20;   // Beyond the retest bar's own extreme
@@ -190,6 +197,13 @@ double   g_retestLevel     = 0.0;
 int      g_retestSide      = 0;
 double   g_retestStrength  = 0.0;
 double   g_retestWidth     = 0.0;
+
+// --- cooldown: the CLOSED-bar time whose raw conditions last passed (0 =
+// never). Live trading processes each bar exactly once in order, so unlike
+// the Python side's precomputed array (needed there because the causality
+// audit calls entry() twice at the same bar), simple persistent state is
+// safe and sufficient here.
+datetime g_lastFireBarTime = 0;
 
 // --- symbol spec, resolved once in OnInit
 double   g_maxSpreadPrice = 0.0;  // InpMaxSpreadPoints converted to price units
@@ -829,6 +843,17 @@ void TryEntry()
       return;
      }
 
+   datetime thisBarTime = iTime(_Symbol, PERIOD_CURRENT, 1);   // the last CLOSED bar
+   if(g_lastFireBarTime != 0)
+     {
+      int barsSinceFire = iBarShift(_Symbol, PERIOD_CURRENT, g_lastFireBarTime, false);
+      if(barsSinceFire < InpCooldownBars)
+        {
+         g_status = StringFormat("cooldown (%d/%d bars)", barsSinceFire, InpCooldownBars);
+         return;
+        }
+     }
+
    double atr[], adx[];
    if(!ReadBuffer(hAtr, 0, 1, 2, atr) || !ReadBuffer(hAdx, 0, 1, 2, adx))
      {
@@ -872,6 +897,7 @@ void TryEntry()
       bool retestOk = (low_ <= g_retestLevel + tol) && (close > g_retestLevel)
                       && (closePos >= InpRetestClosePosMin);
       if(!retestOk) { g_status = "no valid retest (support)"; return; }
+      g_lastFireBarTime = thisBarTime;
 
       double precision = (tol > 0.0) ? (1.0 - MathAbs(low_ - g_retestLevel) / tol) : 0.5;
       double rejection = (InpRetestClosePosMin < 1.0)
@@ -895,6 +921,7 @@ void TryEntry()
       bool retestOk = (high_ >= g_retestLevel - tol) && (close < g_retestLevel)
                       && ((1.0 - closePos) >= InpRetestClosePosMin);
       if(!retestOk) { g_status = "no valid retest (resistance)"; return; }
+      g_lastFireBarTime = thisBarTime;
 
       double precision = (tol > 0.0) ? (1.0 - MathAbs(high_ - g_retestLevel) / tol) : 0.5;
       double rejection = (InpRetestClosePosMin < 1.0)

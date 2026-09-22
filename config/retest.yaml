@@ -73,9 +73,9 @@ strategy:
     retest_max_bars: 12
     retest_tolerance_atr: 0.15  # tightened from 0.25 after a real Strategy Tester run, see the strategy docstring
     retest_close_position_min: 0.68  # tightened from 0.55, same run
+    cooldown_bars: 12           # bars after ANY entry before the next is allowed, same run
     stop_atr_buffer: 0.20
     min_stop_atr_mult: 1.00
-    reward_risk: 2.00
     min_target_spread_ratio: 6.0
     quality_min_reward_risk: 1.50
     quality_max_reward_risk: 3.00

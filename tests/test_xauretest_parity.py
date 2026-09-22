@@ -25,6 +25,7 @@ PARAM_MAP = {
     "InpRetestMaxBars": "retest_max_bars",
     "InpRetestToleranceAtr": "retest_tolerance_atr",
     "InpRetestClosePosMin": "retest_close_position_min",
+    "InpCooldownBars": "cooldown_bars",
     "InpStopAtrBuffer": "stop_atr_buffer",
     "InpMinStopAtrMult": "min_stop_atr_mult",
     "InpMinTargetSpreadRatio": "min_target_spread_ratio",
@@ -99,6 +100,25 @@ def test_entry_snapshots_state_before_advancing():
     assert "g_pendingLevel" not in try_entry_body
 
 
+def test_cooldown_gates_before_regime_checks_and_updates_on_both_sides():
+    """Cooldown is checked right after the pending-level gate, matching
+    Python's entry() ordering (cooldown_ok before ATR/ADX/retest checks), and
+    g_lastFireBarTime is set on each branch that actually confirms a retest --
+    not on the ATR/ADX checks alone, which the Python side's raw-conditions
+    function also requires before counting a bar as having fired."""
+    src = MQ5.read_text()
+    entry_start = src.index("void TryEntry()")
+    entry_end = src.index("void OpenTrade(")
+    body = src[entry_start:entry_end]
+
+    no_pending_idx = body.index("no pending breakout to retest")
+    cooldown_idx = body.index("InpCooldownBars")
+    regime_idx = body.index("InpAtrMinMult * medAtr")
+    assert no_pending_idx < cooldown_idx < regime_idx
+
+    assert body.count("g_lastFireBarTime = thisBarTime;") == 2
+
+
 def _clamp01(x: float) -> float:
     return 0.0 if x < 0.0 else (1.0 if x > 1.0 else x)
 
@@ -137,10 +157,13 @@ def mql5_entry(i: int, feat, p: BreakoutRetestParams):
     """
     a = {c: feat[c].to_numpy(float) for c in
          ("high", "low", "close", "atr", "adx", "atr_med", "close_pos",
-          "retest_level", "retest_side", "retest_strength", "retest_width")}
+          "retest_level", "retest_side", "retest_strength", "retest_width",
+          "cooldown_ok")}
 
     level, side_v = a["retest_level"][i], a["retest_side"][i]
     if side_v == 0.0 or not np.isfinite(level):
+        return None
+    if a["cooldown_ok"][i] < 0.5:
         return None
 
     atr_v, med, adx_v = a["atr"][i], a["atr_med"][i], a["adx"][i]
