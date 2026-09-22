@@ -77,7 +77,7 @@ input group "=== Execution ==="
 input long   InpMagicNumber        = 770633; // Identifies this EA's own trades.
                                              // MUST differ from the other EAs:
                                              // 770577 / 770588 / 770599 / 770611 / 770622.
-input double InpMaxSpread          = 0.30;   // Skip entries above this spread, in USD/oz (not points)
+input int    InpMaxSpreadPoints    = 500;    // Skip entries above this spread, IN POINTS (as MT5 shows it)
 input int    InpSlippagePoints     = 50;     // Max deviation on market orders (points)
 input int    InpTimerMs            = 200;    // How often the hold timer is checked (ms)
 
@@ -86,14 +86,14 @@ input int    InpBurstWindowMs      = 3000;   // Look back this many milliseconds
 input double InpBurstMinMove       = 0.60;   // Bid must move at least this much (USD/oz) in the window
 input int    InpBurstMinTicks      = 6;      // ...on at least this many ticks (a real burst, not one gap)
 input double InpBurstDirectional   = 0.70;   // Share of tick-to-tick steps in the burst's direction
-input double InpBurstSpreadMult    = 3.0;    // The move must be >= N x the live spread
+input double InpBurstSpreadMult    = 2.0;    // The move must be >= N x the live spread (0 = off)
 
 input group "=== Trade: seconds in, seconds out ==="
 input double InpTakeProfit         = 0.80;   // Target distance (USD/oz)
 input double InpStopLoss           = 0.80;   // Stop distance (USD/oz)
 input int    InpMaxHoldSeconds     = 15;     // Close at market after this many seconds
 input int    InpCooldownSeconds    = 20;     // Wait this long after a close before the next entry
-input double InpMinTargetSpreadRatio = 3.0;  // Target must be >= N x the live spread
+input double InpMinTargetSpreadRatio = 2.0;  // Target must be >= N x the live spread (0 = off)
 
 input group "=== Display ==="
 input bool   InpShowPanel          = true;
@@ -198,10 +198,12 @@ int OnInit()
       return(INIT_FAILED);
      }
 
-   // Entered in USD/oz, not points. A points limit means 0.35 USD on a
-   // 2-digit gold feed and 0.035 on a 3-digit one (Exness XAUUSDm) -- which
-   // is narrower than any real spread and silently blocks every entry.
-   g_maxSpreadPrice = InpMaxSpread;
+   // Entered in POINTS, the unit Market Watch shows. What that means in money
+   // depends on the symbol's digits: 500 points is 0.50 USD/oz on a 3-digit
+   // feed (Exness XAUUSDm) and 5.00 on a 2-digit one. The USD value is printed
+   // below; a small points value on a 3-digit feed blocks every entry.
+   double pointSize = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+   g_maxSpreadPrice = InpMaxSpreadPoints * pointSize;
    ArrayInitialize(g_blockCount, 0);
 
    PrintFormat("XauFlash started on %s | server GMT offset %+d h | tick %.5f, tick value %.5f, "
@@ -212,8 +214,11 @@ int OnInit()
                InpSessionStartHour, InpSessionEndHour,
                (InpSessionStartHour + g_gmtOffsetHrs + 24) % 24,
                (InpSessionEndHour   + g_gmtOffsetHrs + 24) % 24);
-   PrintFormat("Max spread: %.2f USD/oz (symbol digits %d, current spread %.3f)",
-               g_maxSpreadPrice, (int)_Digits, CurrentSpread());
+   PrintFormat("Max spread: %d points = %.2f USD/oz (symbol digits %d, current spread %.3f)",
+               InpMaxSpreadPoints, g_maxSpreadPrice, (int)_Digits, CurrentSpread());
+   if(g_maxSpreadPrice < 0.15)
+      PrintFormat("WARNING: a %.3f USD/oz spread limit is narrower than gold's normal spread. "
+                  "Almost every entry will be skipped. Raise MaxSpreadPoints.", g_maxSpreadPrice);
    PrintFormat("Signal: >= %.2f move in %d ms on >= %d ticks | TP %.2f  SL %.2f  hold <= %d s",
                InpBurstMinMove, InpBurstWindowMs, InpBurstMinTicks,
                InpTakeProfit, InpStopLoss, InpMaxHoldSeconds);
@@ -735,13 +740,13 @@ void TryEntry(const MqlTick &tk)
      }
 
    double spread = CurrentSpread();
-   if(spread > 0.0 && MathAbs(move) < InpBurstSpreadMult * spread)
+   if(InpBurstSpreadMult > 0.0 && spread > 0.0 && MathAbs(move) < InpBurstSpreadMult * spread)
      {
       Block(BLK_BURST_VS_SPREAD);
       g_status = StringFormat("burst %.2f < %.1fx spread %.2f", MathAbs(move), InpBurstSpreadMult, spread);
       return;
      }
-   if(spread > 0.0 && InpTakeProfit < InpMinTargetSpreadRatio * spread)
+   if(InpMinTargetSpreadRatio > 0.0 && spread > 0.0 && InpTakeProfit < InpMinTargetSpreadRatio * spread)
      {
       Block(BLK_TARGET_VS_SPREAD);
       g_status = StringFormat("target %.2f < %.1fx spread %.2f", InpTakeProfit, InpMinTargetSpreadRatio, spread);
@@ -869,7 +874,7 @@ void DrawPanel()
       "-----------------------------------------\n"
       "server %s   (GMT%+d)   GMT hour %02d\n"
       "session %02d-%02d GMT      in session: %s\n"
-      "spread %.3f  (max %.2f)\n"
+      "spread %.3f  (max %.2f = %d pts)\n"
       "-----------------------------------------\n"
       "equity      %.2f      risk/trade %.2f%%\n"
       "day P/L     %.2f      limit %.1f%%\n"
@@ -879,7 +884,7 @@ void DrawPanel()
       _Symbol,
       TimeToString(now, TIME_DATE|TIME_SECONDS), g_gmtOffsetHrs, GmtHour(now),
       InpSessionStartHour, InpSessionEndHour, (InSession(now) ? "yes" : "no"),
-      CurrentSpread(), g_maxSpreadPrice,
+      CurrentSpread(), g_maxSpreadPrice, InpMaxSpreadPoints,
       equity, InpRiskPercent,
       g_dayRealisedPnl, InpMaxDailyLossPct,
       g_tradesToday, InpMaxTradesPerDay, g_consecLosses, InpMaxConsecLosses,

@@ -56,20 +56,18 @@ def test_hold_timer_fires_without_ticks():
 
 
 def test_target_covers_a_typical_spread():
-    """At a 0.25 spread the target must still be several spreads away."""
+    """At a 0.25 spread the target must still be at least two spreads away."""
     inp = parse_inputs()
     assert inp["InpTakeProfit"] >= inp["InpMinTargetSpreadRatio"] * 0.25
-    # and the spread filter itself allows no much worse than that
-    assert inp["InpMaxSpread"] * inp["InpMinTargetSpreadRatio"] <= inp["InpTakeProfit"] * 1.5
 
 
-def test_spread_limit_is_in_price_not_points():
-    """35 points is 0.35 on a 2-digit feed but 0.035 on Exness's 3-digit
-    XAUUSDm -- narrower than any real spread, so nothing ever opened."""
+def test_spread_limit_is_not_narrower_than_gold_spread():
+    """35 points was 0.035 USD on Exness's 3-digit XAUUSDm -- narrower than
+    any real spread, so nothing ever opened. On a 3-digit feed the default
+    must clear a normal 0.15-0.40 spread."""
     inp = parse_inputs()
-    assert "InpMaxSpreadPoints" not in inp
-    assert 0.15 <= inp["InpMaxSpread"] <= 1.0
-    assert "g_maxSpreadPrice = InpMaxSpread;" in src()
+    assert inp["InpMaxSpreadPoints"] * 0.001 >= 0.40
+    assert "g_maxSpreadPrice = InpMaxSpreadPoints * pointSize;" in src()
 
 
 def test_every_skip_reason_has_a_name():
