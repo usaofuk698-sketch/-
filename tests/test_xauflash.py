@@ -29,8 +29,7 @@ def test_magic_number_is_unique():
     others = set()
     for f in MQ5.parent.glob("*.mq5"):
         if f != MQ5:
-            m = re.search(r"InpMagicNumber\s*=\s*(\d+)", f.read_text())
-            others.add(int(m.group(1)))
+            others.update(int(m) for m in re.findall(r"Magic\w*\s*=\s*(\d+)", f.read_text()))
     assert int(parse_inputs()["InpMagicNumber"]) not in others
 
 

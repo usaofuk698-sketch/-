@@ -228,6 +228,28 @@ Honest caveats, also printed in the file header:
 - **Broker rules.** Some brokers and most prop firms restrict trades held
   under a minimum time. Check before running it.
 
+## XauSpike — two-core spike catcher (`mt5/XauSpike.mq5`)
+
+بوت يصطاد الحركات العنيفة بالذهب بنظامين، وطريقة الخروج مأخوذة من تقرير
+Strategy Tester لبوت تجاري. شرط الدخول مقدّر، لأن التقرير ما يبيّنه.
+
+| | Core A (seconds) | Core B (minutes) |
+|---|---|---|
+| Trigger (estimated) | ≥ 3.00 in 5 s, ≥ 8 ticks, ≥ 65% one-way | ≥ 6.00 in 60 s, ≥ 30 ticks, ≥ 58% one-way |
+| Stop / target | SL 5, TP 50 (far) | SL 15, TP 15 |
+| Exit | trail from +1.50, 1.00 behind | at +5.00 the stop jumps to +1.50 |
+| Max hold / cooldown | 30 min / 120 s | 90 min / 300 s |
+| Magic | 770644 | 770655 |
+
+Shared guards: 1% risk per core, 5% daily loss, 3-loss streak, 10 trades/day,
+no entries 21–22 GMT (rollover), flat from 20:00 GMT Friday, 500-point spread
+cap. Spike windows are maintained incrementally, so a 60 s window costs the
+same per tick as a 5 s one in the tester. A skip-reason report per core is
+printed daily and on stop.
+
+The same caveats as XauFlash apply, with more force: the tester modifies
+trailing stops with zero latency, and live spikes slip.
+
 ## Risk controls
 
 Sizing is always derived from stop distance, never a fixed lot count — a fixed
