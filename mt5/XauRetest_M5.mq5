@@ -98,14 +98,19 @@ input int    InpServerGmtOffset    = 0;      // Server GMT offset when TZ_MANUAL
 // period -- removing it would have turned the whole run profitable. The
 // user independently flagged the same pattern (a double-top reversal right
 // at day open) across every version of this EA, not just this one run.
-// Window 3 is widened (was 12-16) to recover some of the lost opportunity
-// from a window already PROVEN to work, rather than from the one that failed.
+//
+// Window 3 was WIDENED to 11-17 for one test to recover opportunity, and
+// that widening was then DISPROVEN by the next real run on the same period:
+// the untouched 12-16 core repeated the identical +23.28, while the four new
+// trades the extra hours (11-12, 16-17) added netted -23.31, cancelling the
+// entire gain from dropping window 1. Reverted to the proven 12-16 -- a
+// window's edges are not provably good just because its core is.
 input int    InpSession1Start      = 0;      // Window 1: day open + early Asian (OFF; wraps midnight if enabled)
 input int    InpSession1End        = 0;
 input int    InpSession2Start      = 8;      // Window 2: London open
 input int    InpSession2End        = 10;
-input int    InpSession3Start      = 11;     // Window 3: London/NY overlap (widened from 12-16)
-input int    InpSession3End        = 17;
+input int    InpSession3Start      = 12;     // Window 3: London/NY overlap (proven window; do not widen on a guess)
+input int    InpSession3End        = 16;
 input int    InpNoNewTradesAfter   = 24;     // No new entries from this GMT hour (24 = off)
 input int    InpFlatByHour         = 24;     // Force flat at this GMT hour (24 = never)
 input bool   InpTradeMonday        = true;
