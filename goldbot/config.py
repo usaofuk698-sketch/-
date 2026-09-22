@@ -18,6 +18,7 @@ from .backtest.broker import SimBroker, SpreadModel
 from .contract import Contract
 from .risk import RiskConfig, SessionWindow
 from .strategy.breakout_momentum import BreakoutMomentum, BreakoutMomentumParams
+from .strategy.breakout_retest import BreakoutRetest, BreakoutRetestParams
 from .strategy.mean_reversion_scalper import (
     MeanReversionScalper,
     MeanReversionScalperParams,
@@ -33,6 +34,7 @@ STRATEGIES = {
     "mean_reversion_scalper": (MeanReversionScalper, MeanReversionScalperParams),
     "breakout_momentum": (BreakoutMomentum, BreakoutMomentumParams),
     "volume_profile_wyckoff": (VolumeProfileWyckoff, VolumeProfileWyckoffParams),
+    "breakout_retest": (BreakoutRetest, BreakoutRetestParams),
 }
 
 

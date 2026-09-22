@@ -1,0 +1,82 @@
+# ---------------------------------------------------------------------------
+# XauRetest — breakout-then-retest continuation scalper for XAUUSD M5.
+#
+# Mirrors mt5/XauRetest_M5.mq5. Replace the cost figures with numbers from YOUR
+# broker: a scalper pays the spread on every one of many trades, so these
+# decide the result far more than any strategy parameter does.
+# ---------------------------------------------------------------------------
+symbol: XAUUSD
+timeframe: 5min
+max_bars_in_trade: 24          # 2 hours; a continuation that has stalled is not working
+
+account:
+  initial_capital: 2000
+
+data:
+  path: null
+  timezone: UTC
+
+contract:
+  symbol: XAUUSD
+  contract_size: 100
+  tick_size: 0.001             # 3-digit gold feed (e.g. Exness XAUUSDm)
+  min_lot: 0.01
+  lot_step: 0.01
+  commission_per_lot_per_side: 0.0
+
+costs:
+  spread:
+    base: 0.26                 # measured on a live Exness XAUUSDm feed
+    hour_multipliers: {}
+    rollover_hour: 0
+    rollover_spread: 2.00
+  slippage: 0.03
+
+risk:
+  risk_per_trade_pct: 0.5
+  max_daily_loss_pct: 3.0
+  max_trades_per_day: 10
+  max_consecutive_losses: 6
+  max_concurrent_positions: 1
+  compounding: true
+  min_stop_distance: 0.30
+  max_stop_distance: 30.0
+  max_spread: 0.50
+  min_target_spread_ratio: 6.0
+  trading_days: [0, 1, 2, 3, 4]
+  sessions:
+    - start_hour: 12            # 12:00-16:00 GMT = London/NY overlap = 15:00-19:00 Baghdad
+      end_hour: 16
+  no_new_trades_after_hour: 24
+  flat_by_hour: 24
+
+strategy:
+  name: breakout_retest
+  params:
+    range_lookback: 20
+    break_margin_atr: 0.10
+    min_bar_range_atr: 0.50
+    atr_period: 14
+    regime_lookback: 288
+    atr_min_mult: 0.55
+    atr_max_mult: 3.00
+    adx_period: 14
+    adx_min: 15.0
+    retest_max_bars: 12
+    retest_tolerance_atr: 0.25
+    retest_close_position_min: 0.55
+    stop_atr_buffer: 0.20
+    min_stop_atr_mult: 1.00
+    reward_risk: 2.00
+    min_target_spread_ratio: 6.0
+    breakeven_at_r: 1.0
+    breakeven_offset_atr: 0.05
+    trail_at_r: null
+
+walkforward:
+  train_bars: 30000
+  test_bars: 10000
+  grid:
+    retest_max_bars: [8, 12, 18]
+    retest_tolerance_atr: [0.15, 0.25, 0.40]
+    reward_risk: [1.5, 2.0, 2.5]
