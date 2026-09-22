@@ -22,6 +22,8 @@ PARAM_MAP = {
     "InpAtrMaxMult": "atr_max_mult",
     "InpAdxPeriod": "adx_period",
     "InpAdxMin": "adx_min",
+    "InpHtfEmaPeriod": "htf_ema_period",
+    "InpRequireHtfAlign": "require_htf_alignment",
     "InpRetestMaxBars": "retest_max_bars",
     "InpRetestToleranceAtr": "retest_tolerance_atr",
     "InpRetestClosePosMin": "retest_close_position_min",
@@ -156,7 +158,7 @@ def mql5_entry(i: int, feat, p: BreakoutRetestParams):
     non-trivial logic and deserves the same scrutiny as the entry gate.
     """
     a = {c: feat[c].to_numpy(float) for c in
-         ("high", "low", "close", "atr", "adx", "atr_med", "close_pos",
+         ("high", "low", "close", "atr", "adx", "atr_med", "htf_ema", "close_pos",
           "retest_level", "retest_side", "retest_strength", "retest_width",
           "cooldown_ok")}
 
@@ -169,6 +171,7 @@ def mql5_entry(i: int, feat, p: BreakoutRetestParams):
     atr_v, med, adx_v = a["atr"][i], a["atr_med"][i], a["adx"][i]
     close, high_v, low_v = a["close"][i], a["high"][i], a["low"][i]
     close_pos = a["close_pos"][i]
+    htf_ema_v = a["htf_ema"][i]
     breakout_strength, width = a["retest_strength"][i], a["retest_width"][i]
 
     if not (np.isfinite(atr_v) and np.isfinite(med)):
@@ -179,6 +182,13 @@ def mql5_entry(i: int, feat, p: BreakoutRetestParams):
         return None
     if p.adx_min > 0.0 and (not np.isfinite(adx_v) or adx_v < p.adx_min):
         return None
+    if p.require_htf_alignment:
+        if not np.isfinite(htf_ema_v):
+            return None
+        if side_v > 0 and close <= htf_ema_v:
+            return None
+        if side_v < 0 and close >= htf_ema_v:
+            return None
 
     tol = p.retest_tolerance_atr * atr_v
 

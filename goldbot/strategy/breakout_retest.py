@@ -91,6 +91,18 @@ class BreakoutRetestParams(StrategyParams):
     atr_max_mult: float = 3.00        # skip post-news chaos
     adx_period: int = 14
     adx_min: float = 15.0             # a continuation trade wants some trend behind it
+    # A local M5 breakout can still be fighting the broader trend -- ADX
+    # measures how strong the LOCAL move is, not which way the bigger picture
+    # points. Approximated with a long EMA on this same timeframe rather than
+    # by resampling to H1, matching the same technique already used by
+    # mean_reversion_scalper.py's htf_ema: one series, identical arithmetic in
+    # Python and MQL5, no bar-alignment question to get wrong. A retest is
+    # only taken when price sits on the side of this EMA that agrees with the
+    # trade direction. This is a standard, established technique, not a
+    # tuned-on-one-sample guess -- but whether it actually improves THIS
+    # strategy still needs the same real-data proof as everything else here.
+    htf_ema_period: int = 100
+    require_htf_alignment: bool = True
     # -- the retest
     retest_max_bars: int = 12         # a level nobody retests in this long is stale
     # Both tightened from an initial 0.25/0.55 after a live Strategy Tester run
@@ -144,7 +156,7 @@ class BreakoutRetest(Strategy):
     name = "breakout_retest"
 
     _FEATURE_COLS = (
-        "open", "high", "low", "close", "atr", "adx", "atr_med",
+        "open", "high", "low", "close", "atr", "adx", "atr_med", "htf_ema",
         "close_pos", "bar_range", "retest_level", "retest_side",
         "retest_strength", "retest_width", "cooldown_ok",
     )
@@ -158,7 +170,7 @@ class BreakoutRetest(Strategy):
     def _raw_conditions_pass(
         side_v: float, level: float, atr_v: float, med: float, adx_v: float,
         close: float, high_v: float, low_v: float, close_pos: float,
-        p: "BreakoutRetestParams",
+        htf_ema_v: float, p: "BreakoutRetestParams",
     ) -> bool:
         """The entry filters, EXCLUDING cooldown, as a single pure function.
 
@@ -179,6 +191,13 @@ class BreakoutRetest(Strategy):
             return False
         if p.adx_min > 0.0 and (not np.isfinite(adx_v) or adx_v < p.adx_min):
             return False
+        if p.require_htf_alignment:
+            if not np.isfinite(htf_ema_v):
+                return False
+            if side_v > 0 and close <= htf_ema_v:
+                return False
+            if side_v < 0 and close >= htf_ema_v:
+                return False
         tol = p.retest_tolerance_atr * atr_v
         if side_v > 0:
             return low_v <= level + tol and close > level and close_pos >= p.retest_close_position_min
@@ -187,7 +206,10 @@ class BreakoutRetest(Strategy):
     @property
     def warmup(self) -> int:
         p = self.params
-        return max(p.regime_lookback, p.range_lookback) + p.retest_max_bars + 50
+        return (
+            max(p.regime_lookback, p.range_lookback, p.htf_ema_period)
+            + p.retest_max_bars + 50
+        )
 
     def _bind(self, feat: pd.DataFrame) -> None:
         if self._n == len(feat) and self._a:
@@ -206,6 +228,7 @@ class BreakoutRetest(Strategy):
         out["atr_med"] = (
             out["atr"].rolling(p.regime_lookback, min_periods=p.regime_lookback).median()
         )
+        out["htf_ema"] = ind.ema(c, p.htf_ema_period)
 
         # The range excludes the bar being judged, exactly like XauBreak: a bar
         # cannot break a level that is partly made of itself.
@@ -219,6 +242,7 @@ class BreakoutRetest(Strategy):
         atr_a = out["atr"].to_numpy(float)
         adx_a = out["adx"].to_numpy(float)
         med_a = out["atr_med"].to_numpy(float)
+        htf_ema_a = out["htf_ema"].to_numpy(float)
         close_a = c.to_numpy(float)
         high_a = h.to_numpy(float)
         low_a = l.to_numpy(float)
@@ -260,7 +284,7 @@ class BreakoutRetest(Strategy):
             cooldown_ok[i] = 1.0 if (i - last_fire_bar) >= p.cooldown_bars else 0.0
             if cooldown_ok[i] > 0.0 and self._raw_conditions_pass(
                 pending_side, pending_level, atr_a[i], med_a[i], adx_a[i],
-                close_a[i], high_a[i], low_a[i], close_pos_a[i], p,
+                close_a[i], high_a[i], low_a[i], close_pos_a[i], htf_ema_a[i], p,
             ):
                 last_fire_bar = i
 
@@ -352,6 +376,7 @@ class BreakoutRetest(Strategy):
         atr_v, med, adx_v = a["atr"][i], a["atr_med"][i], a["adx"][i]
         close, high_v, low_v = a["close"][i], a["high"][i], a["low"][i]
         close_pos = a["close_pos"][i]
+        htf_ema_v = a["htf_ema"][i]
         breakout_strength, range_width = a["retest_strength"][i], a["retest_width"][i]
 
         if not (np.isfinite(atr_v) and np.isfinite(med)):
@@ -362,6 +387,13 @@ class BreakoutRetest(Strategy):
             return None
         if p.adx_min > 0.0 and (not np.isfinite(adx_v) or adx_v < p.adx_min):
             return None
+        if p.require_htf_alignment:
+            if not np.isfinite(htf_ema_v):
+                return None
+            if side_v > 0 and close <= htf_ema_v:
+                return None
+            if side_v < 0 and close >= htf_ema_v:
+                return None
 
         tol = p.retest_tolerance_atr * atr_v
 

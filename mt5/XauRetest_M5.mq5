@@ -143,6 +143,13 @@ input double InpAtrMinMult         = 0.55;   // Skip dead tape the spread would 
 input double InpAtrMaxMult         = 3.00;   // Skip post-news chaos
 input int    InpAdxPeriod          = 14;
 input double InpAdxMin             = 15.0;   // A continuation trade wants some trend behind it
+// A local M5 breakout can still be fighting the broader trend -- ADX measures
+// how strong the LOCAL move is, not which way the bigger picture points.
+// Approximated with a long EMA on this same timeframe (matches goldbot's
+// mean_reversion_scalper.py htf_ema): one series, no resampling, no
+// bar-alignment question to get wrong.
+input int    InpHtfEmaPeriod       = 100;    // Long EMA standing in for the higher timeframe
+input bool   InpRequireHtfAlign    = true;   // Only take a retest on the side of this EMA that agrees
 
 input group "=== Strategy: the retest ==="
 input int    InpRetestMaxBars      = 12;     // A level nobody retests in this long is stale
@@ -187,6 +194,7 @@ input bool   InpShowPanel          = true;
 //+------------------------------------------------------------------+
 int      hAtr     = INVALID_HANDLE;
 int      hAdx     = INVALID_HANDLE;
+int      hHtfEma  = INVALID_HANDLE;
 
 datetime g_lastBarTime   = 0;
 int      g_gmtOffsetHrs  = 0;
@@ -247,10 +255,11 @@ int OnInit()
                   "Every period input is counted in BARS, so they mean different "
                   "lengths of time on another timeframe.", EnumToString((ENUM_TIMEFRAMES)Period()));
 
-   hAtr = iATR(_Symbol, PERIOD_CURRENT, InpAtrPeriod);
-   hAdx = iADX(_Symbol, PERIOD_CURRENT, InpAdxPeriod);
+   hAtr    = iATR(_Symbol, PERIOD_CURRENT, InpAtrPeriod);
+   hAdx    = iADX(_Symbol, PERIOD_CURRENT, InpAdxPeriod);
+   hHtfEma = iMA(_Symbol, PERIOD_CURRENT, InpHtfEmaPeriod, 0, MODE_EMA, PRICE_CLOSE);
 
-   if(hAtr==INVALID_HANDLE || hAdx==INVALID_HANDLE)
+   if(hAtr==INVALID_HANDLE || hAdx==INVALID_HANDLE || hHtfEma==INVALID_HANDLE)
      {
       Print("ERROR: failed to create one or more indicator handles.");
       return(INIT_FAILED);
@@ -305,6 +314,7 @@ void OnDeinit(const int reason)
   {
    IndicatorRelease(hAtr);
    IndicatorRelease(hAdx);
+   IndicatorRelease(hHtfEma);
    Comment("");
   }
 
@@ -352,6 +362,7 @@ bool ValidateInputs()
    if(InpQualityMaxRR < InpQualityMinRR)
      { Print("ERROR: QualityMaxRR must be >= QualityMinRR"); return(false); }
    if(InpQualityMaxRiskMult < 1.0)   { Print("ERROR: QualityMaxRiskMult must be >= 1.0"); return(false); }
+   if(InpHtfEmaPeriod < 2)           { Print("ERROR: HtfEmaPeriod must be >= 2"); return(false); }
    if(InpRangeLookback < 2)          { Print("ERROR: RangeLookback must be >= 2"); return(false); }
    if(InpRetestMaxBars < 1)          { Print("ERROR: RetestMaxBars must be >= 1"); return(false); }
    if(InpRetestClosePosMin < 0.0 || InpRetestClosePosMin > 1.0)
@@ -841,7 +852,7 @@ void AdvancePendingBreakout()
 //+------------------------------------------------------------------+
 void TryEntry()
   {
-   int need = MathMax(InpRegimeLookback, InpRangeLookback) + InpRetestMaxBars + 10;
+   int need = MathMax(InpRegimeLookback, MathMax(InpRangeLookback, InpHtfEmaPeriod)) + InpRetestMaxBars + 10;
    if(Bars(_Symbol, PERIOD_CURRENT) < need)
      {
       g_status = StringFormat("warming up (%d/%d bars)", Bars(_Symbol, PERIOD_CURRENT), need);
@@ -868,8 +879,9 @@ void TryEntry()
         }
      }
 
-   double atr[], adx[];
-   if(!ReadBuffer(hAtr, 0, 1, 2, atr) || !ReadBuffer(hAdx, 0, 1, 2, adx))
+   double atr[], adx[], htfEma[];
+   if(!ReadBuffer(hAtr, 0, 1, 2, atr) || !ReadBuffer(hAdx, 0, 1, 2, adx)
+      || !ReadBuffer(hHtfEma, 0, 1, 2, htfEma))
      {
       g_status = "indicator data not ready";
       return;
@@ -884,7 +896,7 @@ void TryEntry()
      }
 
    double close = rates[0].close, high_ = rates[0].high, low_ = rates[0].low;
-   double atrV = atr[0], adxV = adx[0];
+   double atrV = atr[0], adxV = adx[0], htfEmaV = htfEma[0];
    if(atrV <= 0.0) { g_status = "ATR unavailable"; return; }
 
    double medAtr = MedianAtr(InpRegimeLookback);
@@ -895,6 +907,13 @@ void TryEntry()
      {
       g_status = StringFormat("ADX %.1f < %.1f", adxV, InpAdxMin);
       return;
+     }
+   if(InpRequireHtfAlign)
+     {
+      if(g_retestSide == 1 && close <= htfEmaV)
+        { g_status = "against higher-timeframe trend (long)"; return; }
+      if(g_retestSide == -1 && close >= htfEmaV)
+        { g_status = "against higher-timeframe trend (short)"; return; }
      }
 
    double barRange = high_ - low_;

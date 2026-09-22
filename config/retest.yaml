@@ -77,6 +77,8 @@ strategy:
     atr_max_mult: 3.00
     adx_period: 14
     adx_min: 15.0
+    htf_ema_period: 100
+    require_htf_alignment: true
     retest_max_bars: 12
     retest_tolerance_atr: 0.15  # tightened from 0.25 after a real Strategy Tester run, see the strategy docstring
     retest_close_position_min: 0.68  # tightened from 0.55, same run
