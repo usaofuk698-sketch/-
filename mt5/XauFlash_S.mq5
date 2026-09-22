@@ -139,6 +139,11 @@ int      g_timerExits    = 0;    // closed by the hold timer, not SL/TP
 
 string   g_status        = "starting";
 
+// False in a non-visual Strategy Tester run. Building the panel text on every
+// tick is harmless live but, over the millions of real ticks a tester run
+// replays, it is most of the run time -- and nobody can see it anyway.
+bool     g_panel         = true;
+
 //+------------------------------------------------------------------+
 //| INIT                                                             |
 //+------------------------------------------------------------------+
@@ -157,9 +162,16 @@ int OnInit()
    g_gmtOffsetHrs = ResolveGmtOffset();
    ResetDailyState(true);
 
+   bool tester = (bool)MQLInfoInteger(MQL_TESTER);
+   bool visual = (bool)MQLInfoInteger(MQL_VISUAL_MODE);
+   g_panel = InpShowPanel && (!tester || visual);
+
    // The hold timer must fire even when no ticks arrive, or a 15-second trade
-   // can sit open for a minute in a quiet patch.
-   if(!EventSetMillisecondTimer(MathMax(50, InpTimerMs)))
+   // can sit open for a minute in a quiet patch. In the tester a 200 ms timer
+   // means 432,000 simulated events a day; 1 s is accurate enough there, since
+   // real-tick data already calls OnTick several times a second.
+   int timerMs = tester ? 1000 : MathMax(50, InpTimerMs);
+   if(!EventSetMillisecondTimer(timerMs))
      {
       Print("ERROR: could not start the millisecond timer.");
       return(INIT_FAILED);
@@ -187,7 +199,7 @@ int OnInit()
       PrintFormat("WARNING: the broker's minimum stop distance is %.2f; SL/TP below that "
                   "will be widened to it.", minOff);
 
-   if(MQLInfoInteger(MQL_TESTER))
+   if(tester)
       Print("TESTER: this EA is only meaningful with 'Every tick based on real ticks'. "
             "Any other modelling mode generates synthetic ticks and the result is fiction.");
 
@@ -322,7 +334,7 @@ void OnTick()
    if(HasOpenPosition())
      {
       ManageOpenPosition(now);
-      if(InpShowPanel) DrawPanel();
+      if(g_panel) DrawPanel();
       return;
      }
 
@@ -330,12 +342,12 @@ void OnTick()
    if(!MayOpen(now, why))
      {
       g_status = "no entry: " + why;
-      if(InpShowPanel) DrawPanel();
+      if(g_panel) DrawPanel();
       return;
      }
 
    TryEntry(tk);
-   if(InpShowPanel) DrawPanel();
+   if(g_panel) DrawPanel();
   }
 
 //+------------------------------------------------------------------+
@@ -640,7 +652,8 @@ void TryEntry(const MqlTick &tk)
    int    dir = DetectBurst(nowMs, move, ticks, dirShare);
    if(dir == 0)
      {
-      g_status = StringFormat("watching: %+.2f in %d ticks (%.0f%% one-way)",
+      if(g_panel)
+         g_status = StringFormat("watching: %+.2f in %d ticks (%.0f%% one-way)",
                               move, ticks, dirShare * 100.0);
       return;
      }
@@ -738,7 +751,8 @@ void ManageOpenPosition(datetime now)
 
    if(reason == "")
      {
-      g_status = StringFormat("in trade %.1f / %d s  P/L %.2f", heldSec, InpMaxHoldSeconds,
+      if(g_panel)
+         g_status = StringFormat("in trade %.1f / %d s  P/L %.2f", heldSec, InpMaxHoldSeconds,
                               posInfo.Profit());
       return;
      }
