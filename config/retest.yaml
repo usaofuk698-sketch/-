@@ -83,7 +83,8 @@ strategy:
     quality_max_risk_mult: 1.50
     breakeven_at_r: 1.0
     breakeven_offset_atr: 0.05
-    trail_at_r: null
+    trail_at_r: 1.5             # beyond this, the stop follows price instead of sitting at breakeven
+    trail_atr_mult: 1.20
 
 walkforward:
   train_bars: 30000

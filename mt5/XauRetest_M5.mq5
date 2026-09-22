@@ -150,6 +150,9 @@ input group "=== Strategy: in-trade management ==="
 input bool   InpUseBreakeven       = true;
 input double InpBreakevenAtR       = 1.0;    // Move to break-even at this R
 input double InpBreakevenOffAtr    = 0.05;   // Lock in this much ATR beyond entry
+input bool   InpUseTrail           = true;   // Beyond InpTrailAtR, follow price at InpTrailAtrMult x ATR
+input double InpTrailAtR           = 1.5;    // Start trailing at this R (after break-even)
+input double InpTrailAtrMult       = 1.20;   // Trailing distance behind price, in ATR
 
 input group "=== Display ==="
 input bool   InpShowPanel          = true;
@@ -1046,6 +1049,11 @@ void ManageOpenPosition(datetime now)
       double gainedR = (close - entry) / risk;
       if(InpUseBreakeven && gainedR >= InpBreakevenAtR)
          newSl = MathMax(newSl, entry + InpBreakevenOffAtr * atrV);
+      // Past InpTrailAtR the stop follows price instead of sitting still at
+      // break-even -- a trade up 2R that gives it ALL back to break-even is
+      // a scratch, not a win, and this is what turns that into a partial win.
+      if(InpUseTrail && gainedR >= InpTrailAtR)
+         newSl = MathMax(newSl, close - InpTrailAtrMult * atrV);
       double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
       newSl = MathMin(newSl, bid - MinStopOffset());
       if(newSl <= sl) return;                 // tighten only
@@ -1055,6 +1063,8 @@ void ManageOpenPosition(datetime now)
       double gainedR = (entry - close) / risk;
       if(InpUseBreakeven && gainedR >= InpBreakevenAtR)
          newSl = MathMin(newSl, entry - InpBreakevenOffAtr * atrV);
+      if(InpUseTrail && gainedR >= InpTrailAtR)
+         newSl = MathMin(newSl, close + InpTrailAtrMult * atrV);
       double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
       newSl = MathMax(newSl, ask + MinStopOffset());
       if(newSl >= sl) return;                 // tighten only

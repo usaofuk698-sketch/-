@@ -113,7 +113,14 @@ class BreakoutRetestParams(StrategyParams):
     # -- management
     breakeven_at_r: float | None = 1.0
     breakeven_offset_atr: float = 0.05
-    trail_at_r: float | None = None
+    # A trade that reaches breakeven and later reverses all the way to the
+    # (now-raised) stop is a scratch, not a loss -- but one that reaches 1.5R
+    # or more and gives it ALL back is exactly the "won, then lost" complaint
+    # this trail exists to stop: past trail_at_r, the stop follows price at a
+    # fixed ATR distance instead of sitting still at breakeven. It only ever
+    # tightens (never loosens), same rule as breakeven.
+    trail_at_r: float | None = 1.5
+    trail_atr_mult: float = 1.20
 
 
 class BreakoutRetest(Strategy):
@@ -362,16 +369,24 @@ class BreakoutRetest(Strategy):
         atr_v = float(atr_v) if np.isfinite(atr_v) else 0.0
         close = float(self._a["close"][i])
         risk = pos.initial_risk
-        if risk <= 0 or atr_v <= 0 or p.breakeven_at_r is None:
+        if risk <= 0 or atr_v <= 0:
+            return pos.stop_loss, pos.take_profit
+        if p.breakeven_at_r is None and p.trail_at_r is None:
             return pos.stop_loss, pos.take_profit
 
         sl = pos.stop_loss
         if pos.side is Side.LONG:
-            if (close - pos.entry_price) / risk >= p.breakeven_at_r:
+            gained_r = (close - pos.entry_price) / risk
+            if p.breakeven_at_r is not None and gained_r >= p.breakeven_at_r:
                 sl = max(sl, pos.entry_price + p.breakeven_offset_atr * atr_v)
+            if p.trail_at_r is not None and gained_r >= p.trail_at_r:
+                sl = max(sl, close - p.trail_atr_mult * atr_v)
             sl = min(sl, close)
         else:
-            if (pos.entry_price - close) / risk >= p.breakeven_at_r:
+            gained_r = (pos.entry_price - close) / risk
+            if p.breakeven_at_r is not None and gained_r >= p.breakeven_at_r:
                 sl = min(sl, pos.entry_price - p.breakeven_offset_atr * atr_v)
+            if p.trail_at_r is not None and gained_r >= p.trail_at_r:
+                sl = min(sl, close + p.trail_atr_mult * atr_v)
             sl = max(sl, close)
         return sl, pos.take_profit

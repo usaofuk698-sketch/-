@@ -34,6 +34,8 @@ PARAM_MAP = {
     "InpQualityMaxRiskMult": "quality_max_risk_mult",
     "InpBreakevenAtR": "breakeven_at_r",
     "InpBreakevenOffAtr": "breakeven_offset_atr",
+    "InpTrailAtR": "trail_at_r",
+    "InpTrailAtrMult": "trail_atr_mult",
 }
 
 
@@ -109,6 +111,20 @@ def _quality(breakout_strength, adx_v, precision, rejection, p: BreakoutRetestPa
     )
     bs = _clamp01(breakout_strength) if np.isfinite(breakout_strength) else 0.5
     return (bs + adx_component + _clamp01(precision) + _clamp01(rejection)) / 4.0
+
+
+def test_trail_follows_breakeven_and_only_tightens():
+    """Trailing is checked AFTER break-even (so break-even still applies even
+    before trailing engages) and must only ever tighten the stop -- MathMax
+    for a long (raise the floor), MathMin for a short (lower the ceiling),
+    the same rule break-even itself follows just above it."""
+    src = MQ5.read_text()
+    manage_body = src[src.index("void ManageOpenPosition("):]
+    be_idx = manage_body.index("InpBreakevenAtR")
+    trail_idx = manage_body.index("InpUseTrail && gainedR >= InpTrailAtR")
+    assert be_idx < trail_idx
+    assert "newSl = MathMax(newSl, close - InpTrailAtrMult * atrV)" in manage_body
+    assert "newSl = MathMin(newSl, close + InpTrailAtrMult * atrV)" in manage_body
 
 
 def mql5_entry(i: int, feat, p: BreakoutRetestParams):
