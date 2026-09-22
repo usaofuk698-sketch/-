@@ -91,12 +91,21 @@ input int    InpServerGmtOffset    = 0;      // Server GMT offset when TZ_MANUAL
 // Three separate windows, not one continuous block -- the quiet stretch of
 // late-Asian/late-London hours between them is deliberately excluded, not a
 // fourth window someone forgot. Set a window's Start == End to disable it.
-input int    InpSession1Start      = 22;     // Window 1: day open + early Asian (wraps midnight)
-input int    InpSession1End        = 2;
+//
+// Window 1 (day open + early Asian) is OFF by default: a real Strategy
+// Tester run (2026.09.01-17, XAUUSDm) broke down net P/L by window and found
+// -23.53 from this one alone against +23.28 from window 3 over the same
+// period -- removing it would have turned the whole run profitable. The
+// user independently flagged the same pattern (a double-top reversal right
+// at day open) across every version of this EA, not just this one run.
+// Window 3 is widened (was 12-16) to recover some of the lost opportunity
+// from a window already PROVEN to work, rather than from the one that failed.
+input int    InpSession1Start      = 0;      // Window 1: day open + early Asian (OFF; wraps midnight if enabled)
+input int    InpSession1End        = 0;
 input int    InpSession2Start      = 8;      // Window 2: London open
 input int    InpSession2End        = 10;
-input int    InpSession3Start      = 12;     // Window 3: London/NY overlap
-input int    InpSession3End        = 16;
+input int    InpSession3Start      = 11;     // Window 3: London/NY overlap (widened from 12-16)
+input int    InpSession3End        = 17;
 input int    InpNoNewTradesAfter   = 24;     // No new entries from this GMT hour (24 = off)
 input int    InpFlatByHour         = 24;     // Force flat at this GMT hour (24 = never)
 input bool   InpTradeMonday        = true;

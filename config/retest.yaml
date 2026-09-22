@@ -45,16 +45,18 @@ risk:
   min_target_spread_ratio: 6.0
   trading_days: [0, 1, 2, 3, 4]
   sessions:
-    # Three windows instead of one continuous block: day-open/early Asian
-    # (wraps midnight), London open, and the London/NY overlap. Between them
-    # is deliberately excluded -- that is the quiet stretch of the Asian and
-    # late-London hours, not a fourth window that was forgotten.
-    - start_hour: 22            # day open + early Asian = 01:00-05:00 Baghdad
-      end_hour: 2
+    # Day-open/early-Asian is deliberately OMITTED, not forgotten: a real
+    # Strategy Tester run (2026.09.01-17, XAUUSDm) broke net P/L down by
+    # window and found -23.53 from that window alone against +23.28 from the
+    # overlap over the same period -- dropping it would have made the whole
+    # run profitable. The user independently flagged the same pattern (a
+    # double-top reversal right at day open) across every prior version.
     - start_hour: 8             # London open = 11:00-13:00 Baghdad
       end_hour: 10
-    - start_hour: 12            # London/NY overlap = 15:00-19:00 Baghdad
-      end_hour: 16
+    - start_hour: 11            # London/NY overlap, widened from 12-16 to
+      end_hour: 17              # recover opportunity from the window that's
+                                 # actually proven, not the one that failed.
+                                 # = 14:00-20:00 Baghdad
   no_new_trades_after_hour: 24
   flat_by_hour: 24
 
