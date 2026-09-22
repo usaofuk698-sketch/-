@@ -93,8 +93,17 @@ class BreakoutRetestParams(StrategyParams):
     adx_min: float = 15.0             # a continuation trade wants some trend behind it
     # -- the retest
     retest_max_bars: int = 12         # a level nobody retests in this long is stale
-    retest_tolerance_atr: float = 0.25   # how close price must come back, in ATR
-    retest_close_position_min: float = 0.55   # the retest bar must reject the level cleanly
+    # Both tightened from an initial 0.25/0.55 after a live Strategy Tester run
+    # (2026.09.01-17, XAUUSDm, 100% real ticks) showed the dominant failure
+    # mode: 23 of 36 trades hit a real stop, many within 2-15 minutes (1-3
+    # M5 bars) of entry. A retest bar that barely clears close_position_min
+    # is not a rejection, it is noise that happened to close on the right
+    # side -- and tolerance_atr=0.25 accepted "in the neighbourhood" of the
+    # level as a retest instead of requiring it be genuinely close. Neither
+    # number is proven optimal; they are a direct, evidence-driven response
+    # to a specific observed failure mode, not a blind guess.
+    retest_tolerance_atr: float = 0.15   # how close price must come back, in ATR
+    retest_close_position_min: float = 0.68   # the retest bar must reject the level cleanly
     # -- stop and target
     stop_atr_buffer: float = 0.20     # beyond the retest bar's own extreme
     min_stop_atr_mult: float = 1.00

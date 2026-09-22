@@ -132,8 +132,12 @@ input double InpAdxMin             = 15.0;   // A continuation trade wants some 
 
 input group "=== Strategy: the retest ==="
 input int    InpRetestMaxBars      = 12;     // A level nobody retests in this long is stale
-input double InpRetestToleranceAtr = 0.25;   // How close price must come back, in ATR
-input double InpRetestClosePosMin  = 0.55;   // The retest bar must reject the level cleanly
+// Both tightened from an initial 0.25/0.55 after a live Strategy Tester run
+// (2026.09.01-17, XAUUSDm, 100% real ticks) showed the dominant failure mode:
+// 23 of 36 trades hit a real stop, many within 2-15 minutes of entry. See
+// breakout_retest.py's BreakoutRetestParams for the full note.
+input double InpRetestToleranceAtr = 0.15;   // How close price must come back, in ATR
+input double InpRetestClosePosMin  = 0.68;   // The retest bar must reject the level cleanly
 
 input group "=== Strategy: stop and target ==="
 input double InpStopAtrBuffer      = 0.20;   // Beyond the retest bar's own extreme

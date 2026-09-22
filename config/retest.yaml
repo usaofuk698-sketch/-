@@ -71,8 +71,8 @@ strategy:
     adx_period: 14
     adx_min: 15.0
     retest_max_bars: 12
-    retest_tolerance_atr: 0.25
-    retest_close_position_min: 0.55
+    retest_tolerance_atr: 0.15  # tightened from 0.25 after a real Strategy Tester run, see the strategy docstring
+    retest_close_position_min: 0.68  # tightened from 0.55, same run
     stop_atr_buffer: 0.20
     min_stop_atr_mult: 1.00
     reward_risk: 2.00
