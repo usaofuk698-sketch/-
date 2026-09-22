@@ -12,6 +12,7 @@ import pandas as pd
 from goldbot.backtest.types import Side, Signal
 from goldbot.strategy.base import Strategy, StrategyParams
 from goldbot.strategy.breakout_retest import BreakoutRetest, BreakoutRetestParams
+from goldbot.strategy.combo_123 import Combo123
 from goldbot.strategy.trend_pullback import TrendPullback
 from goldbot.validation.lookahead import audit
 
@@ -123,3 +124,14 @@ def test_breakout_retest_immediate_trigger_is_causal(long_bars):
     report = audit(BreakoutRetest(params), long_bars, n_checks=25)
     assert report.passed, report.summary()
     assert report.checks == 25
+
+
+def test_combo_123_is_causal(long_bars):
+    """123 dispatches to five real sub-strategy instances (see combo_123.py's
+    docstring) -- each is already covered by its own causality test, but the
+    dispatcher's own plumbing (prepare() merging five feature sets, entry()
+    reconstructing each sub-strategy's view via _sub_frame()) is new and
+    could itself leak the future even if every sub-strategy it calls cannot."""
+    report = audit(Combo123(), long_bars, n_checks=20)
+    assert report.passed, report.summary()
+    assert report.checks == 20

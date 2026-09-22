@@ -19,6 +19,7 @@ from .contract import Contract
 from .risk import RiskConfig, SessionWindow
 from .strategy.breakout_momentum import BreakoutMomentum, BreakoutMomentumParams
 from .strategy.breakout_retest import BreakoutRetest, BreakoutRetestParams
+from .strategy.combo_123 import Combo123, Combo123Params
 from .strategy.mean_reversion_scalper import (
     MeanReversionScalper,
     MeanReversionScalperParams,
@@ -35,6 +36,7 @@ STRATEGIES = {
     "breakout_momentum": (BreakoutMomentum, BreakoutMomentumParams),
     "volume_profile_wyckoff": (VolumeProfileWyckoff, VolumeProfileWyckoffParams),
     "breakout_retest": (BreakoutRetest, BreakoutRetestParams),
+    "combo_123": (Combo123, Combo123Params),
 }
 
 
