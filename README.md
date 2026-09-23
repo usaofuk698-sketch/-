@@ -250,6 +250,11 @@ printed daily and on stop.
 **v1.20:** core B is off by default. Over Jul 1 – Sep 17 2026 core A made
 +1412 on 2000 (141 trades) and core B lost −476, losing in every month.
 
+**v1.30:** Jan 1 – Sep 17, core A only: positive every month Jan–Jul
+(Jan–Jun was never used for tuning), but Aug won 67% and Sep 44% and lost.
+A recent-performance brake halves a core's risk while its last 10 trades
+net a loss in USD/oz.
+
 The same caveats as XauFlash apply, with more force: the tester modifies
 trailing stops with zero latency, and live spikes slip.
 

@@ -135,3 +135,15 @@ def test_skip_hours_default_is_empty_and_checked():
     s = src()
     assert re.search(r'input string InpSkipHours\s*=\s*"";', s)
     assert "if(g_skipHour[h])" in s
+
+
+def test_performance_brake_scales_risk_not_fixed_lots():
+    s = src()
+    i = inputs()
+    assert i["InpPerfTrades"] >= 5
+    assert 0 < i["InpPerfRiskMult"] < 1
+    assert "c.riskPct * g_perfMult[i]" in s
+    # measured per ounce, so compounding lot sizes do not skew it
+    assert "money / (vol * perOzPerLot)" in s
+    # needs a full window before judging
+    assert "g_perfN[c] >= InpPerfTrades" in s

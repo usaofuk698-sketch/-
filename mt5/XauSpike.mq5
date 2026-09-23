@@ -41,6 +41,12 @@
 //|   SkipHours added so an hour filter can be tried without editing
 //|   code. Default is empty: 140 trades are too few to pick hours on.
 //|
+//| v1.30 -- Jan 1 - Sep 17, core A only (418 trades, PF 4.17)
+//|   Jan-Jun, never used for tuning: positive every month. Good sign.
+//|   But: Jan-Jul won 93-100% a month, Aug 67%, Sep 44% and negative.
+//|   The most recent weeks are the weakest. Added a brake: while a
+//|   core's last 10 trades net a loss (in USD/oz), its risk is halved.
+//|
 //| READ THIS BEFORE RUNNING IT ON REAL MONEY
 //|   * Test ONLY with "Every tick based on real ticks". Anything else
 //|     invents the ticks a spike is made of.
@@ -52,7 +58,7 @@
 //+------------------------------------------------------------------+
 #property copyright "XauSpike"
 #property link      ""
-#property version   "1.20"
+#property version   "1.30"
 
 #include <Trade\Trade.mqh>
 #include <Trade\PositionInfo.mqh>
@@ -120,6 +126,8 @@ input group "=== Account protection (both cores together) ==="
 input double InpMaxDailyLossPct    = 5.0;    // Stop for the day at this realised loss (%). 0 = OFF
 input int    InpMaxConsecLosses    = 3;      // Stop for the day after N losses in a row. 0 = OFF
 input int    InpMaxTradesPerDay    = 10;     // 0 = unlimited
+input int    InpPerfTrades         = 10;     // Watch each core's last N closed trades (0 = off)
+input double InpPerfRiskMult       = 0.5;    // If they net a loss, risk is multiplied by this
 
 input group "=== Time filters (hours are GMT/UTC) ==="
 input ENUM_TZ_MODE InpTzMode       = TZ_AUTO;
@@ -205,6 +213,13 @@ int      g_consecLosses  = 0;
 bool     g_halted        = false;
 string   g_haltReason    = "";
 datetime g_lastHistoryScan = 0;
+
+// Recent-performance brake: each core's last InpPerfTrades results in
+// USD/oz (lot size divided out, so compounding does not distort it).
+bool     g_perfDirty     = true;
+double   g_perfSum[2];
+int      g_perfN[2];
+double   g_perfMult[2] = {1.0, 1.0};
 datetime g_lastClose[2];
 
 double   g_maxSpreadPrice= 0.0;
@@ -556,7 +571,59 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
         {
          g_lastClose[i] = TimeCurrent();
          g_lastHistoryScan = 0;
+         g_perfDirty = true;
         }
+  }
+
+//+------------------------------------------------------------------+
+//| The brake. A spike edge depends on the market having real spikes;|
+//| when it stops having them the strategy does not know, and keeps  |
+//| trading full size into a regime that no longer pays. In testing  |
+//| Jan-Jul won 93-100% of trades and Aug-Sep 67% then 44%. This     |
+//| halves risk while a core's last N trades net a loss, and restores|
+//| it once they net a gain again. It keeps trading so it can see    |
+//| the recovery; it only trades smaller until then.                 |
+//+------------------------------------------------------------------+
+void UpdatePerformance()
+  {
+   g_perfDirty = false;
+   if(InpPerfTrades <= 0) return;
+
+   datetime now = TimeCurrent();
+   if(!HistorySelect(now - 120 * 86400, now + 60)) { g_perfDirty = true; return; }
+
+   double perOzPerLot = g_tickValue / g_tickSize;   // money per 1.00 price move per lot
+   for(int c = 0; c < 2; c++) { g_perfSum[c] = 0.0; g_perfN[c] = 0; }
+
+   for(int k = HistoryDealsTotal() - 1; k >= 0; k--)
+     {
+      ulong tk = HistoryDealGetTicket(k);
+      if(tk == 0) continue;
+      if(HistoryDealGetString(tk, DEAL_SYMBOL) != _Symbol) continue;
+      long e = HistoryDealGetInteger(tk, DEAL_ENTRY);
+      if(e != DEAL_ENTRY_OUT && e != DEAL_ENTRY_OUT_BY) continue;
+      long magic = HistoryDealGetInteger(tk, DEAL_MAGIC);
+      double vol = HistoryDealGetDouble(tk, DEAL_VOLUME);
+      if(vol <= 0.0 || perOzPerLot <= 0.0) continue;
+      double money = HistoryDealGetDouble(tk, DEAL_PROFIT) + HistoryDealGetDouble(tk, DEAL_SWAP)
+                   + HistoryDealGetDouble(tk, DEAL_COMMISSION);
+      for(int c = 0; c < 2; c++)
+         if(magic == g_core[c].magic && g_perfN[c] < InpPerfTrades)
+           {
+            g_perfSum[c] += money / (vol * perOzPerLot);
+            g_perfN[c]++;
+           }
+     }
+
+   for(int c = 0; c < 2; c++)
+     {
+      // Only judge on a full window: three trades say nothing.
+      double mult = (g_perfN[c] >= InpPerfTrades && g_perfSum[c] < 0.0) ? InpPerfRiskMult : 1.0;
+      if(mult != g_perfMult[c])
+         PrintFormat("Core %s: last %d trades net %+.2f USD/oz -> risk x%.2f",
+                     g_coreName[c], g_perfN[c], g_perfSum[c], mult);
+      g_perfMult[c] = mult;
+     }
   }
 
 //+------------------------------------------------------------------+
@@ -662,6 +729,7 @@ void RollDailyStateIfNeeded()
 
 void ScanHistoryIfNeeded()
   {
+   if(g_perfDirty) UpdatePerformance();
    datetime now = TimeCurrent();
    if(g_lastHistoryScan != 0 && now - g_lastHistoryScan < 1) return;
    g_lastHistoryScan = now;
@@ -748,11 +816,12 @@ double NormalizeLots(double lots)
    return(NormalizeDouble(lots, 2));
   }
 
-double CalcLots(const CoreCfg &c, double slDist)
+double CalcLots(int i, double slDist)
   {
+   CoreCfg c = g_core[i];
    if(c.fixedLots > 0.0) return(NormalizeLots(c.fixedLots));
    if(slDist <= 0.0) return(0.0);
-   double riskCash   = AccountInfoDouble(ACCOUNT_EQUITY) * c.riskPct / 100.0;
+   double riskCash   = AccountInfoDouble(ACCOUNT_EQUITY) * c.riskPct * g_perfMult[i] / 100.0;
    double lossPerLot = slDist / g_tickSize * g_tickValue;
    if(lossPerLot <= 0.0) return(0.0);
    return(NormalizeLots(riskCash / lossPerLot));
@@ -877,7 +946,7 @@ void TryEntry(int i, datetime now, const MqlTick &tk)
    double minOff = MinStopOffset();
    double slDist = MathMax(c.sl, minOff);
    double tpDist = MathMax(c.tp, minOff);
-   double lots   = CalcLots(c, slDist);
+   double lots   = CalcLots(i, slDist);
    if(lots <= 0.0)
      { Block(i, BLK_SIZE); g_status[i] = "lot below broker minimum"; return; }
 
@@ -1012,12 +1081,12 @@ void DrawPanel()
       "XauSpike  |  %s   spread %.3f (max %.2f)\n"
       "-----------------------------------------\n"
       "equity %.2f   day P/L %.2f   trades %d/%d   streak %d/%d\n"
-      "core A: %s\n"
-      "core B: %s%s",
+      "core A: %s   (risk x%.2f, last %d: %+.2f/oz)\n"
+      "core B: %s   (risk x%.2f, last %d: %+.2f/oz)%s",
       _Symbol, CurrentSpread(), g_maxSpreadPrice,
       equity, g_dayRealisedPnl, g_tradesToday, InpMaxTradesPerDay, g_consecLosses, InpMaxConsecLosses,
-      (g_core[0].enable ? g_status[0] : "disabled"),
-      (g_core[1].enable ? g_status[1] : "disabled"),
+      (g_core[0].enable ? g_status[0] : "disabled"), g_perfMult[0], g_perfN[0], g_perfSum[0],
+      (g_core[1].enable ? g_status[1] : "disabled"), g_perfMult[1], g_perfN[1], g_perfSum[1],
       (g_halted ? ("\nHALTED: " + g_haltReason) : ""));
    Comment(txt);
   }
