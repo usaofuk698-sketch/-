@@ -147,3 +147,25 @@ def test_performance_brake_scales_risk_not_fixed_lots():
     assert "money / (vol * perOzPerLot)" in s
     # needs a full window before judging
     assert "g_perfN[c] >= InpPerfTrades" in s
+
+
+TEST_COPY = MQ5.parent / "XauSpike_Test.mq5"
+
+
+def test_test_copy_differs_only_in_lots_magic_and_labels():
+    """The test copy must trade the same logic as XauSpike, or its report
+    says nothing about the EA that will actually run live."""
+    live = src().splitlines()
+    test = TEST_COPY.read_text().splitlines()
+    allowed = ("FixedLots", "Magic ", "XauSpike", "TEST COPY", "LIVE chart", "if(!tester)",
+               "Identical logic", "cores, so every", "magic numbers. For", "account.", "//|")
+    import difflib
+    for line in difflib.unified_diff(live, test, lineterm="", n=0):
+        if line.startswith(("---", "+++", "@@")):
+            continue
+        body = line[1:].strip()
+        if not body:
+            continue
+        assert any(a in body for a in allowed), f"unexpected difference: {line}"
+    t = TEST_COPY.read_text()
+    assert "InpA_FixedLots        = 0.01;" in t and "InpB_FixedLots        = 0.01;" in t
