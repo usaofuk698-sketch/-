@@ -23,6 +23,16 @@
 //| other). Its ENTRY rule is not visible in a report, so the triggers
 //| above are estimates. Tune them in the Strategy Tester.
 //|
+//| v1.10 -- after the first real-tick test (Sep 1-17, 126 trades, PF 0.84)
+//| Wins were right (72%) but too small against full-stop losses: core A
+//| needed 75% to break even, core B 85%. And 126 trades in 12 days against
+//| the reference's ~20 a month meant the trigger fired on ordinary moves.
+//|   * SpikeRatio   the move must be N x a normal move for its window
+//|                  (M1 ATR scaled by sqrt(time)), not a fixed size
+//|   * FreshShare   skip a spike that has already stalled
+//|   * NoFollow     a spike that has not paid within N seconds is closed
+//|                  small instead of waiting for the full stop
+//|
 //| READ THIS BEFORE RUNNING IT ON REAL MONEY
 //|   * Test ONLY with "Every tick based on real ticks". Anything else
 //|     invents the ticks a spike is made of.
@@ -34,7 +44,7 @@
 //+------------------------------------------------------------------+
 #property copyright "XauSpike"
 #property link      ""
-#property version   "1.00"
+#property version   "1.10"
 
 #include <Trade\Trade.mqh>
 #include <Trade\PositionInfo.mqh>
@@ -68,6 +78,10 @@ input double InpA_LockTrigger      = 0.00;   // At this profit move SL to +LockP
 input double InpA_LockProfit       = 0.00;
 input int    InpA_MaxHoldMinutes   = 30;     // Close at market after this (0 = off)
 input int    InpA_CooldownSeconds  = 120;    // Wait after a close before the next entry
+input double InpA_SpikeRatio       = 5.0;    // Spike must be N x a normal move for this window (0 = off)
+input double InpA_FreshShare       = 0.25;   // Last third of the window must carry >= this share of the move (0 = off)
+input int    InpA_NoFollowSeconds  = 20;     // Close if the trade has not reached +NoFollowProfit by then (0 = off)
+input double InpA_NoFollowProfit   = 1.00;
 
 input group "=== Core B: momentum (minutes) ==="
 input bool   InpB_Enable           = true;
@@ -86,6 +100,13 @@ input double InpB_LockTrigger      = 5.00;   // At +5.00 ...
 input double InpB_LockProfit       = 1.50;   // ... the stop moves to +1.50
 input int    InpB_MaxHoldMinutes   = 90;
 input int    InpB_CooldownSeconds  = 300;
+input double InpB_SpikeRatio       = 3.0;
+input double InpB_FreshShare       = 0.20;
+input int    InpB_NoFollowSeconds  = 600;
+input double InpB_NoFollowProfit   = 3.00;
+
+input group "=== Volatility reference for SpikeRatio ==="
+input int    InpAtrM1Period        = 30;     // "Normal" = M1 ATR over this many minutes
 
 input group "=== Account protection (both cores together) ==="
 input double InpMaxDailyLossPct    = 5.0;    // Stop for the day at this realised loss (%). 0 = OFF
@@ -135,6 +156,10 @@ struct CoreCfg
    double lockProfit;
    int    maxHoldMin;
    int    cooldownSec;
+   double spikeRatio;
+   double freshShare;
+   int    noFollowSec;
+   double noFollowProfit;
   };
 
 CoreCfg  g_core[2];
@@ -189,13 +214,19 @@ string   g_status[2];
 enum ENUM_BLOCK
   {
    BLK_ACCOUNT = 0, BLK_TIME, BLK_COOLDOWN, BLK_SPREAD, BLK_AUTOTRADING,
-   BLK_NO_SPIKE, BLK_SIZE, BLK_ORDER_FAILED, BLK_COUNT
+   BLK_NO_SPIKE, BLK_SIZE, BLK_ORDER_FAILED, BLK_WEAK_SPIKE, BLK_STALLED, BLK_COUNT
   };
-// Sized by a literal (8 = BLK_COUNT): an enum value as an array bound is not
+// Sized by a literal (10 = BLK_COUNT): an enum value as an array bound is not
 // worth the risk in a file that cannot be test-compiled here.
-string   g_blockName[8] = {"account guard", "time filter", "cooldown", "spread too wide",
-                           "AutoTrading off", "no spike", "lot below minimum", "order rejected"};
-long     g_blockCount[2][8];
+string   g_blockName[10] = {"account guard", "time filter", "cooldown", "spread too wide",
+                            "AutoTrading off", "no spike", "lot below minimum", "order rejected",
+                            "spike not unusual", "spike stalled"};
+long     g_blockCount[2][10];
+
+int      hAtrM1 = INVALID_HANDLE;
+// Best profit each open position has reached, for the no-follow-through exit.
+ulong    g_peakTicket[2];
+double   g_peakProfit[2];
 double   g_maxMoveSeen[2];
 int      g_entries[2];
 
@@ -213,6 +244,8 @@ void LoadCores()
    g_core[0].trailStart = InpA_TrailStart; g_core[0].trailDist = InpA_TrailDistance;
    g_core[0].lockTrigger = InpA_LockTrigger; g_core[0].lockProfit = InpA_LockProfit;
    g_core[0].maxHoldMin = InpA_MaxHoldMinutes; g_core[0].cooldownSec = InpA_CooldownSeconds;
+   g_core[0].spikeRatio = InpA_SpikeRatio; g_core[0].freshShare = InpA_FreshShare;
+   g_core[0].noFollowSec = InpA_NoFollowSeconds; g_core[0].noFollowProfit = InpA_NoFollowProfit;
 
    g_core[1].enable = InpB_Enable;
    g_core[1].magic = InpB_Magic;         g_core[1].riskPct = InpB_RiskPercent;
@@ -223,6 +256,8 @@ void LoadCores()
    g_core[1].trailStart = InpB_TrailStart; g_core[1].trailDist = InpB_TrailDistance;
    g_core[1].lockTrigger = InpB_LockTrigger; g_core[1].lockProfit = InpB_LockProfit;
    g_core[1].maxHoldMin = InpB_MaxHoldMinutes; g_core[1].cooldownSec = InpB_CooldownSeconds;
+   g_core[1].spikeRatio = InpB_SpikeRatio; g_core[1].freshShare = InpB_FreshShare;
+   g_core[1].noFollowSec = InpB_NoFollowSeconds; g_core[1].noFollowProfit = InpB_NoFollowProfit;
   }
 
 bool ValidateCore(int i)
@@ -238,6 +273,8 @@ bool ValidateCore(int i)
    if(c.directional < 0.5 || c.directional > 1.0){ Print(p, "Directional must be in [0.5, 1]."); return(false); }
    if(c.trailStart > 0.0 && c.trailDist <= 0.0)
      { Print(p, "TrailDistance must be > 0 when TrailStart is set."); return(false); }
+   if(c.spikeRatio < 0.0 || c.freshShare < 0.0 || c.freshShare > 1.0)
+     { Print(p, "SpikeRatio must be >= 0 and FreshShare in [0, 1]."); return(false); }
    if(c.lockTrigger > 0.0 && c.lockProfit >= c.lockTrigger)
      { Print(p, "LockProfit must be below LockTrigger."); return(false); }
    return(true);
@@ -269,6 +306,15 @@ int OnInit()
       g_winStart[c] = 0; g_winSize[c] = 0; g_winUps[c] = 0; g_winDowns[c] = 0;
      }
    g_status[0] = "watching"; g_status[1] = "watching";
+
+   hAtrM1 = iATR(_Symbol, PERIOD_M1, MathMax(2, InpAtrM1Period));
+   if(hAtrM1 == INVALID_HANDLE)
+     {
+      Print("ERROR: could not create the M1 ATR used by SpikeRatio.");
+      return(INIT_FAILED);
+     }
+   g_peakTicket[0] = 0; g_peakTicket[1] = 0;
+   g_peakProfit[0] = 0.0; g_peakProfit[1] = 0.0;
 
    // The max-hold rule must fire even when no ticks arrive.
    EventSetTimer(1);
@@ -306,6 +352,7 @@ void OnDeinit(const int reason)
   {
    EventKillTimer();
    ReportBlocks("final");
+   if(hAtrM1 != INVALID_HANDLE) IndicatorRelease(hAtrM1);
    Comment("");
   }
 
@@ -691,6 +738,45 @@ void ReportBlocks(string label)
   }
 
 //+------------------------------------------------------------------+
+//| How unusual is a move of this size over this window, right now?  |
+//| "Normal" is the M1 ATR scaled to the window by sqrt(time), the   |
+//| usual random-walk scaling. A fixed 3.00 trigger fires all day in |
+//| a fast market and never in a slow one; a ratio asks the question |
+//| that matters -- is this move out of character for the moment.   |
+//+------------------------------------------------------------------+
+double SpikeRatio(int i, double move)
+  {
+   double atr[];
+   ArraySetAsSeries(atr, true);
+   if(CopyBuffer(hAtrM1, 0, 1, 1, atr) != 1 || atr[0] <= 0.0) return(-1.0);
+   double normal = atr[0] * MathSqrt(g_core[i].windowMs / 60000.0);
+   if(normal <= 0.0) return(-1.0);
+   return(MathAbs(move) / normal);
+  }
+
+//+------------------------------------------------------------------+
+//| Share of the move made in the last third of the window. A spike  |
+//| that did all its work early and has gone flat is exhausted: that |
+//| is where the losing entries in testing came from. Walked only    |
+//| once a spike has been found, so its cost does not matter.        |
+//+------------------------------------------------------------------+
+double FreshShare(int i, long nowMs, double move)
+  {
+   if(move == 0.0) return(0.0);
+   long cutoff = nowMs - g_core[i].windowMs / 3;
+   int  newest = (g_tickHead - 1 + TICK_BUF) % TICK_BUF;
+   int  idx    = newest;
+   for(int k = 1; k < g_winSize[i]; k++)
+     {
+      int prev = (idx - 1 + TICK_BUF) % TICK_BUF;
+      if(g_tickMs[prev] < cutoff) break;
+      idx = prev;
+     }
+   double recent = g_tickBid[newest] - g_tickBid[idx];
+   return(recent / move);   // negative if the last third ran against the spike
+  }
+
+//+------------------------------------------------------------------+
 //| ENTRY                                                            |
 //+------------------------------------------------------------------+
 void TryEntry(int i, datetime now, const MqlTick &tk)
@@ -715,6 +801,21 @@ void TryEntry(int i, datetime now, const MqlTick &tk)
       Block(i, BLK_NO_SPIKE);
       if(g_panel)
          g_status[i] = StringFormat("watching %+.2f / %.2f (%d ticks, %.0f%%)", move, c.trigger, ticks, share * 100.0);
+      return;
+     }
+
+   double ratio = SpikeRatio(i, move);
+   if(c.spikeRatio > 0.0 && ratio >= 0.0 && ratio < c.spikeRatio)
+     {
+      Block(i, BLK_WEAK_SPIKE);
+      if(g_panel) g_status[i] = StringFormat("spike %.2f only %.1fx normal", move, ratio);
+      return;
+     }
+   double fresh = FreshShare(i, nowMs, move);
+   if(c.freshShare > 0.0 && fresh < c.freshShare)
+     {
+      Block(i, BLK_STALLED);
+      if(g_panel) g_status[i] = StringFormat("spike %.2f stalled (%.0f%% recent)", move, fresh * 100.0);
       return;
      }
 
@@ -765,8 +866,9 @@ void TryEntry(int i, datetime now, const MqlTick &tk)
    double fill = trade.ResultPrice();
    double slip = (fill > 0.0) ? ((dir > 0) ? fill - price : price - fill) : 0.0;
    g_status[i] = StringFormat("opened %s %.2f", (dir > 0 ? "BUY" : "SELL"), lots);
-   PrintFormat("Core %s %s %.2f @ %.3f (quote %.3f, slip %+.3f) SL %.3f TP %.3f | spike %+.2f in %d ticks, %.0f%% one-way, spread %.3f",
-               g_coreName[i], (dir > 0 ? "BUY" : "SELL"), lots, fill, price, slip, sl, tp, move, ticks, share * 100.0, spread);
+   PrintFormat("Core %s %s %.2f @ %.3f (quote %.3f, slip %+.3f) SL %.3f TP %.3f | spike %+.2f in %d ticks, %.0f%% one-way, %.1fx normal, %.0f%% in last third, spread %.3f",
+               g_coreName[i], (dir > 0 ? "BUY" : "SELL"), lots, fill, price, slip, sl, tp, move, ticks,
+               share * 100.0, ratio, fresh * 100.0, spread);
   }
 
 //+------------------------------------------------------------------+
@@ -778,10 +880,17 @@ void ManagePosition(int i, datetime now, const MqlTick &tk)
    CoreCfg c = g_core[i];
    ulong  ticket = posInfo.Ticket();
    long   type   = posInfo.PositionType();
-   double open   = posInfo.PriceOpen();
+   double openPx   = posInfo.PriceOpen();
    double sl     = posInfo.StopLoss();
    double tp     = posInfo.TakeProfit();
    trade.SetExpertMagicNumber(c.magic);
+
+   bool   isBuy  = (type == POSITION_TYPE_BUY);
+   double price  = isBuy ? tk.bid : tk.ask;          // the side the position closes on
+   double profit = isBuy ? price - openPx : openPx - price;
+
+   if(g_peakTicket[i] != ticket) { g_peakTicket[i] = ticket; g_peakProfit[i] = profit; }
+   if(profit > g_peakProfit[i]) g_peakProfit[i] = profit;
 
    string why = "";
    bool   flat = g_halted && g_haltReason == "daily loss limit";
@@ -791,6 +900,15 @@ void ManagePosition(int i, datetime now, const MqlTick &tk)
      {
       flat = true;
       why = StringFormat("held %d min", c.maxHoldMin);
+     }
+   // A real spike keeps going straight away. One that has not paid
+   // NoFollowProfit within NoFollowSeconds has usually failed, and waiting
+   // for the full stop turns a small loss into a full one.
+   if(!flat && c.noFollowSec > 0 && now - (datetime)posInfo.Time() >= c.noFollowSec
+      && g_peakProfit[i] < c.noFollowProfit)
+     {
+      flat = true;
+      why = StringFormat("no follow-through (best %+.2f in %d s)", g_peakProfit[i], c.noFollowSec);
      }
    if(flat)
      {
@@ -804,14 +922,11 @@ void ManagePosition(int i, datetime now, const MqlTick &tk)
       return;
      }
 
-   bool   isBuy  = (type == POSITION_TYPE_BUY);
-   double price  = isBuy ? tk.bid : tk.ask;          // the side the position closes on
-   double profit = isBuy ? price - open : open - price;
    double newSl  = sl;
 
    if(c.lockTrigger > 0.0 && profit >= c.lockTrigger)
      {
-      double lockSl = isBuy ? open + c.lockProfit : open - c.lockProfit;
+      double lockSl = isBuy ? openPx + c.lockProfit : openPx - c.lockProfit;
       newSl = isBuy ? MathMax(newSl, lockSl) : (newSl == 0.0 ? lockSl : MathMin(newSl, lockSl));
      }
    if(c.trailStart > 0.0 && profit >= c.trailStart)

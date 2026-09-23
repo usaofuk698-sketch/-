@@ -100,3 +100,26 @@ def test_lots_are_floored():
 def test_installer_expects_the_current_file_size():
     size = re.search(r'if not "!SRCSIZE!"=="(\d+)"', BAT.read_text()).group(1)
     assert int(size) == MQ5.stat().st_size
+
+
+def test_entry_quality_filters_are_on_by_default():
+    i = inputs()
+    for core in "AB":
+        assert i[f"Inp{core}_SpikeRatio"] > 1.0
+        assert 0 < i[f"Inp{core}_FreshShare"] < 1.0
+        assert i[f"Inp{core}_NoFollowSeconds"] > 0
+
+
+def test_no_follow_exit_cuts_before_the_stop():
+    """The quick exit only helps if it fires before the stop would."""
+    i = inputs()
+    for core in "AB":
+        assert i[f"Inp{core}_NoFollowProfit"] < i[f"Inp{core}_StopLoss"]
+    # core A must give a spike less time than the reference's median hold
+    # of a winner is allowed to run (16 s) plus a margin, not minutes
+    assert i["InpA_NoFollowSeconds"] <= 60
+
+
+def test_peak_is_reset_for_each_new_position():
+    s = src()
+    assert "if(g_peakTicket[i] != ticket)" in s
