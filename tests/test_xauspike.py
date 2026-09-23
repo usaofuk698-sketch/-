@@ -123,3 +123,15 @@ def test_no_follow_exit_cuts_before_the_stop():
 def test_peak_is_reset_for_each_new_position():
     s = src()
     assert "if(g_peakTicket[i] != ticket)" in s
+
+
+def test_core_b_is_off_by_default():
+    """Core B lost in each of July, August and September 2026."""
+    assert inputs()["InpB_Enable"] is False
+    assert inputs()["InpA_Enable"] is True
+
+
+def test_skip_hours_default_is_empty_and_checked():
+    s = src()
+    assert re.search(r'input string InpSkipHours\s*=\s*"";', s)
+    assert "if(g_skipHour[h])" in s

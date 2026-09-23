@@ -247,6 +247,9 @@ cap. Spike windows are maintained incrementally, so a 60 s window costs the
 same per tick as a 5 s one in the tester. A skip-reason report per core is
 printed daily and on stop.
 
+**v1.20:** core B is off by default. Over Jul 1 – Sep 17 2026 core A made
++1412 on 2000 (141 trades) and core B lost −476, losing in every month.
+
 The same caveats as XauFlash apply, with more force: the tester modifies
 trailing stops with zero latency, and live spikes slip.
 

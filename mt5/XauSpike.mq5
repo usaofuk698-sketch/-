@@ -33,6 +33,14 @@
 //|   * NoFollow     a spike that has not paid within N seconds is closed
 //|                  small instead of waiting for the full stop
 //|
+//| v1.20 -- after Jul 1 - Sep 17 (310 trades, +935 on 2000, PF 1.51)
+//|   core A  +1412   141 trades, avg win 4.97 vs avg loss 2.47: the
+//|                   no-follow-through exit halved the average loss
+//|   core B  -476    lost in July, August AND September. It is OFF by
+//|                   default; its code stays so it can be re-tested.
+//|   SkipHours added so an hour filter can be tried without editing
+//|   code. Default is empty: 140 trades are too few to pick hours on.
+//|
 //| READ THIS BEFORE RUNNING IT ON REAL MONEY
 //|   * Test ONLY with "Every tick based on real ticks". Anything else
 //|     invents the ticks a spike is made of.
@@ -44,7 +52,7 @@
 //+------------------------------------------------------------------+
 #property copyright "XauSpike"
 #property link      ""
-#property version   "1.10"
+#property version   "1.20"
 
 #include <Trade\Trade.mqh>
 #include <Trade\PositionInfo.mqh>
@@ -84,7 +92,7 @@ input int    InpA_NoFollowSeconds  = 20;     // Close if the trade has not reach
 input double InpA_NoFollowProfit   = 1.00;
 
 input group "=== Core B: momentum (minutes) ==="
-input bool   InpB_Enable           = true;
+input bool   InpB_Enable           = false;  // OFF: lost money in every month tested (see v1.20 notes)
 input long   InpB_Magic            = 770655; // Must differ from every other EA
 input double InpB_RiskPercent      = 1.0;
 input double InpB_FixedLots        = 0.0;
@@ -121,6 +129,7 @@ input int    InpSessionEndHour     = 24;
 input int    InpRolloverSkipStart  = 21;     // No new entries in the daily rollover
 input int    InpRolloverSkipEnd    = 22;     // (spread blowout). Equal values = off
 input int    InpFridayCloseHour    = 20;     // Flat and no entries from this GMT hour on Friday (24 = off)
+input string InpSkipHours          = "";     // Extra GMT hours with no entries, e.g. "16,17,18" (empty = none)
 input bool   InpTradeMonday        = true;
 input bool   InpTradeTuesday       = true;
 input bool   InpTradeWednesday     = true;
@@ -296,6 +305,8 @@ int OnInit()
    g_panel = InpShowPanel && (!tester || visual);
 
    g_gmtOffsetHrs = ResolveGmtOffset();
+   if(!ParseSkipHours())
+      return(INIT_FAILED);
    ResetDailyState(true);
    for(int c = 0; c < 2; c++)
      {
@@ -449,6 +460,41 @@ bool MustBeFlat(datetime now, string &why)
    return(false);
   }
 
+//+------------------------------------------------------------------+
+//| "16,17,18" -> g_skipHour[16..18] = true                          |
+//+------------------------------------------------------------------+
+bool g_skipHour[24];
+
+bool ParseSkipHours()
+  {
+   ArrayInitialize(g_skipHour, false);
+   string txt = InpSkipHours;
+   StringTrimLeft(txt);
+   StringTrimRight(txt);
+   if(txt == "") return(true);
+
+   string parts[];
+   int n = StringSplit(txt, ',', parts);
+   string list = "";
+   for(int k = 0; k < n; k++)
+     {
+      string one = parts[k];
+      StringTrimLeft(one);
+      StringTrimRight(one);
+      if(one == "") continue;
+      int h = (int)StringToInteger(one);
+      if(h < 0 || h > 23 || IntegerToString(h) != one)
+        {
+         PrintFormat("ERROR: SkipHours entry '%s' is not an hour 0-23. Use a list like 16,17,18", one);
+         return(false);
+        }
+      g_skipHour[h] = true;
+      list += (list == "" ? "" : ",") + IntegerToString(h);
+     }
+   PrintFormat("No new entries in these GMT hours: %s", list);
+   return(true);
+  }
+
 bool TimeAllowsEntry(datetime now)
   {
    int h, dow;
@@ -458,6 +504,7 @@ bool TimeAllowsEntry(datetime now)
    if(!(InpSessionStartHour <= 0 && InpSessionEndHour >= 24) &&
       !HourIn(h, InpSessionStartHour, InpSessionEndHour))    return(false);
    if(HourIn(h, InpRolloverSkipStart, InpRolloverSkipEnd))   return(false);
+   if(g_skipHour[h])                                         return(false);
    return(true);
   }
 
