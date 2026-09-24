@@ -169,3 +169,19 @@ def test_test_copy_differs_only_in_lots_magic_and_labels():
         assert any(a in body for a in allowed), f"unexpected difference: {line}"
     t = TEST_COPY.read_text()
     assert "InpA_FixedLots        = 0.01;" in t and "InpB_FixedLots        = 0.01;" in t
+
+
+def test_cooldown_starts_when_a_position_disappears():
+    """In the tester the stop-out and the next tick's entry could share a
+    second, before OnTradeTransaction had started the cooldown."""
+    s = src()
+    assert "if(!has && g_hadPos[i])" in s
+    assert "g_hadPos[i] = SelectCorePosition(g_core[i]);" in s
+
+
+def test_test_copy_is_up_to_date():
+    import subprocess, sys
+    before = TEST_COPY.read_text()
+    subprocess.run([sys.executable, str(MQ5.parents[1] / "tools" / "make_spike_test.py")],
+                   check=True, capture_output=True)
+    assert TEST_COPY.read_text() == before, "run tools/make_spike_test.py"

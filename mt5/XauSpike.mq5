@@ -47,6 +47,10 @@
 //|   The most recent weeks are the weakest. Added a brake: while a
 //|   core's last 10 trades net a loss (in USD/oz), its risk is halved.
 //|
+//| v1.31 -- fix: cooldown now starts on the tick a position disappears.
+//|   Before, a stop-out and the next entry could land in the same second
+//|   (Aug-Sep fixed-lot test: 7 such re-entries, net -10.9 USD/oz).
+//|
 //| READ THIS BEFORE RUNNING IT ON REAL MONEY
 //|   * Test ONLY with "Every tick based on real ticks". Anything else
 //|     invents the ticks a spike is made of.
@@ -58,7 +62,7 @@
 //+------------------------------------------------------------------+
 #property copyright "XauSpike"
 #property link      ""
-#property version   "1.30"
+#property version   "1.31"
 
 #include <Trade\Trade.mqh>
 #include <Trade\PositionInfo.mqh>
@@ -221,6 +225,7 @@ double   g_perfSum[2];
 int      g_perfN[2];
 double   g_perfMult[2] = {1.0, 1.0};
 datetime g_lastClose[2];
+bool     g_hadPos[2];          // did this core hold a position on the previous tick
 
 double   g_maxSpreadPrice= 0.0;
 double   g_tickSize      = 0.0;
@@ -539,10 +544,23 @@ void OnTick()
    for(int i = 0; i < 2; i++)
      {
       if(!g_core[i].enable) continue;
-      if(SelectCorePosition(g_core[i]))
+      bool has = SelectCorePosition(g_core[i]);
+      // A position we held on the last tick is gone: the server closed it
+      // at SL/TP. Start the cooldown NOW. OnTradeTransaction also does
+      // this, but it can arrive after this tick -- and the tester showed
+      // the cost: 7 re-entries in the same second as the exit, into the
+      // same exhausted spike, 3 of them full stop-outs.
+      if(!has && g_hadPos[i])
+        {
+         g_lastClose[i]    = now;
+         g_lastHistoryScan = 0;
+         g_perfDirty       = true;
+        }
+      if(has)
          ManagePosition(i, now, tk);
       else
          TryEntry(i, now, tk);
+      g_hadPos[i] = SelectCorePosition(g_core[i]);
      }
    if(g_panel) DrawPanel();
   }
