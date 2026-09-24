@@ -3,10 +3,10 @@
 //|        Spike catcher: two cores, fast trailing exits             |
 //|                 XAUUSD - any chart - built for Exness MT5        |
 //+------------------------------------------------------------------+
-//| *** TEST COPY *** of XauSpike for the Strategy Tester.
+//| *** TEST COPY *** of XauSpike2 for the Strategy Tester.
 //| Identical logic; the only differences are FixedLots = 0.01 on both
 //| cores, so every trade has the same weight in the report, and its own
-//| magic numbers. For live trading use XauSpike, whose lots follow the
+//| magic numbers. For live trading use XauSpike2, whose lots follow the
 //| account.
 //|
 //| WHAT THIS IS
@@ -359,7 +359,7 @@ int OnInit()
    double pointSize = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
    g_maxSpreadPrice = InpMaxSpreadPoints * pointSize;
 
-   PrintFormat("XauSpike started on %s | server GMT%+d | tick %.5f value %.5f | lots %.2f-%.2f step %.2f | stops %d pts, freeze %d pts",
+   PrintFormat("XauSpike2 started on %s | server GMT%+d | tick %.5f value %.5f | lots %.2f-%.2f step %.2f | stops %d pts, freeze %d pts",
                _Symbol, g_gmtOffsetHrs, g_tickSize, g_tickValue, g_volMin, g_volMax, g_volStep,
                g_stopsLevelPts, g_freezeLevelPts);
    PrintFormat("Max spread: %d points = %.2f USD/oz (digits %d, current spread %.3f)",
@@ -379,9 +379,9 @@ int OnInit()
       WarnIfUnaffordable(i);
      }
 
-   PrintFormat("TEST COPY: fixed lots A=%.2f B=%.2f. For live trading use XauSpike.", InpA_FixedLots, InpB_FixedLots);
+   PrintFormat("TEST COPY: fixed lots A=%.2f B=%.2f. For live trading use XauSpike2.", InpA_FixedLots, InpB_FixedLots);
    if(!tester)
-      Print("WARNING: XauSpike_Test is running on a LIVE chart. Its lots do not follow the account. Use XauSpike for live trading.");
+      Print("WARNING: XauSpike_Test is running on a LIVE chart. Its lots do not follow the account. Use XauSpike2 for live trading.");
 
    if(tester)
       Print("TESTER: use 'Every tick based on real ticks'. Other modes invent the ticks a spike is made of.");
@@ -869,7 +869,7 @@ void ReportBlocks(string label)
       for(int b = 0; b < BLK_COUNT; b++) total += g_blockCount[c][b];
       if(total == 0 && g_entries[c] == 0) continue;
 
-      PrintFormat("---- XauSpike core %s %s report: %d entries | biggest move in window %.2f (trigger %.2f) ----",
+      PrintFormat("---- XauSpike2 core %s %s report: %d entries | biggest move in window %.2f (trigger %.2f) ----",
                   g_coreName[c], label, g_entries[c], g_maxMoveSeen[c], g_core[c].trigger);
       for(int b = 0; b < BLK_COUNT; b++)
          if(g_blockCount[c][b] > 0)

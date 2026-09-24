@@ -11,8 +11,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-MQ5 = Path(__file__).resolve().parents[1] / "mt5" / "XauSpike.mq5"
-BAT = Path(__file__).resolve().parents[1] / "mt5" / "installer" / "Install-XauSpike.bat"
+MQ5 = Path(__file__).resolve().parents[1] / "mt5" / "XauSpike2.mq5"
+BAT = Path(__file__).resolve().parents[1] / "mt5" / "installer" / "Install-XauSpike2.bat"
 
 
 def src() -> str:

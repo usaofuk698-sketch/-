@@ -228,7 +228,9 @@ Honest caveats, also printed in the file header:
 - **Broker rules.** Some brokers and most prop firms restrict trades held
   under a minimum time. Check before running it.
 
-## XauSpike — two-core spike catcher (`mt5/XauSpike.mq5`)
+## XauSpike2 — two-core spike catcher (`mt5/XauSpike2.mq5`)
+
+Renamed from XauSpike at v1.31. The logic and magic numbers are unchanged.
 
 بوت يصطاد الحركات العنيفة بالذهب بنظامين، وطريقة الخروج مأخوذة من تقرير
 Strategy Tester لبوت تجاري. شرط الدخول مقدّر، لأن التقرير ما يبيّنه.

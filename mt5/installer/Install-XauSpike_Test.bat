@@ -27,8 +27,8 @@ if not exist "%SRC%" (
 
 for %%F in ("%SRC%") do set "SRCSIZE=%%~zF"
 echo   المصدر / Source : XauSpike_Test.mq5  ^(!SRCSIZE! bytes^)
-if not "!SRCSIZE!"=="46626" (
-  echo   [!] تحذير: الحجم المتوقع 46626 بايت. الملف قد يكون ناقصاً.
+if not "!SRCSIZE!"=="46632" (
+  echo   [!] تحذير: الحجم المتوقع 46632 بايت. الملف قد يكون ناقصاً.
 )
 echo.
 

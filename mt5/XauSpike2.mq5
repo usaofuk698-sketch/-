@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//|                                                   XauSpike.mq5   |
+//|                                                  XauSpike2.mq5   |
 //|        Spike catcher: two cores, fast trailing exits             |
 //|                 XAUUSD - any chart - built for Exness MT5        |
 //+------------------------------------------------------------------+
@@ -60,7 +60,7 @@
 //|   * Few trades a month is normal: it waits for spikes.
 //|   * Demo first, for at least a month.
 //+------------------------------------------------------------------+
-#property copyright "XauSpike"
+#property copyright "XauSpike2"
 #property link      ""
 #property version   "1.31"
 
@@ -353,7 +353,7 @@ int OnInit()
    double pointSize = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
    g_maxSpreadPrice = InpMaxSpreadPoints * pointSize;
 
-   PrintFormat("XauSpike started on %s | server GMT%+d | tick %.5f value %.5f | lots %.2f-%.2f step %.2f | stops %d pts, freeze %d pts",
+   PrintFormat("XauSpike2 started on %s | server GMT%+d | tick %.5f value %.5f | lots %.2f-%.2f step %.2f | stops %d pts, freeze %d pts",
                _Symbol, g_gmtOffsetHrs, g_tickSize, g_tickValue, g_volMin, g_volMax, g_volStep,
                g_stopsLevelPts, g_freezeLevelPts);
    PrintFormat("Max spread: %d points = %.2f USD/oz (digits %d, current spread %.3f)",
@@ -859,7 +859,7 @@ void ReportBlocks(string label)
       for(int b = 0; b < BLK_COUNT; b++) total += g_blockCount[c][b];
       if(total == 0 && g_entries[c] == 0) continue;
 
-      PrintFormat("---- XauSpike core %s %s report: %d entries | biggest move in window %.2f (trigger %.2f) ----",
+      PrintFormat("---- XauSpike2 core %s %s report: %d entries | biggest move in window %.2f (trigger %.2f) ----",
                   g_coreName[c], label, g_entries[c], g_maxMoveSeen[c], g_core[c].trigger);
       for(int b = 0; b < BLK_COUNT; b++)
          if(g_blockCount[c][b] > 0)
@@ -969,7 +969,7 @@ void TryEntry(int i, datetime now, const MqlTick &tk)
      { Block(i, BLK_SIZE); g_status[i] = "lot below broker minimum"; return; }
 
    trade.SetExpertMagicNumber(c.magic);
-   string comment = "XauSpike " + g_coreName[i];
+   string comment = "XauSpike2 " + g_coreName[i];
    double price, sl, tp;
    bool ok;
    if(dir > 0)
@@ -1096,7 +1096,7 @@ void DrawPanel()
   {
    double equity = AccountInfoDouble(ACCOUNT_EQUITY);
    string txt = StringFormat(
-      "XauSpike  |  %s   spread %.3f (max %.2f)\n"
+      "XauSpike2  |  %s   spread %.3f (max %.2f)\n"
       "-----------------------------------------\n"
       "equity %.2f   day P/L %.2f   trades %d/%d   streak %d/%d\n"
       "core A: %s   (risk x%.2f, last %d: %+.2f/oz)\n"
